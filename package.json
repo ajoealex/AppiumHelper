@@ -1,0 +1,14 @@
+{
+  "name": "appium-helper",
+  "version": "1.0.0",
+  "description": "Web-based tool for interacting with Appium sessions",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "cd api && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "install:all": "cd api && npm install && cd ../web && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
