@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import CaptureViewer from '../components/CaptureViewer';
 
-export default function Session({ appiumUrl, sessionId, onDisconnect }) {
+export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDisconnect }) {
   const [contexts, setContexts] = useState([]);
   const [selectedContext, setSelectedContext] = useState('');
   const [captures, setCaptures] = useState([]);
@@ -15,7 +15,7 @@ export default function Session({ appiumUrl, sessionId, onDisconnect }) {
 
   const loadContexts = useCallback(async () => {
     try {
-      const data = await api.getContexts(appiumUrl, sessionId);
+      const data = await api.getContexts(appiumUrl, sessionId, customHeaders);
       const contextList = data.value || [];
       setContexts(contextList);
       if (contextList.length > 0) {
@@ -24,7 +24,7 @@ export default function Session({ appiumUrl, sessionId, onDisconnect }) {
     } catch (err) {
       setError('Failed to load contexts: ' + err.message);
     }
-  }, [appiumUrl, sessionId]);
+  }, [appiumUrl, sessionId, customHeaders]);
 
   const loadCaptures = useCallback(async () => {
     try {
@@ -73,7 +73,7 @@ export default function Session({ appiumUrl, sessionId, onDisconnect }) {
     setSuccess('');
 
     try {
-      const result = await api.capture(appiumUrl, sessionId, selectedContext);
+      const result = await api.capture(appiumUrl, sessionId, selectedContext, customHeaders);
       setSuccess(`Captured successfully: ${result.folderName}`);
       await loadCaptures();
     } catch (err) {

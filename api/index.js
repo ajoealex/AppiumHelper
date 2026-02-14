@@ -21,15 +21,65 @@ if (!fs.existsSync(APP_DATA_PATH)) {
   fs.mkdirSync(APP_DATA_PATH, { recursive: true });
 }
 
-// Store active appium URL per request (passed via header)
+// Store active appium URL per request
 const getAppiumUrl = (req) => {
+  if (req.body && typeof req.body.appiumUrl === 'string' && req.body.appiumUrl.trim()) {
+    return req.body.appiumUrl;
+  }
   return req.headers['x-appium-url'] || 'http://localhost:4723/wd/hub';
 };
 
+// Get custom headers from request
+const getCustomHeaders = (req) => {
+  if (req.body && req.body.customHeaders && typeof req.body.customHeaders === 'object') {
+    return req.body.customHeaders;
+  }
+
+  try {
+    const customHeadersStr = req.headers['x-custom-headers'];
+    return customHeadersStr ? JSON.parse(customHeadersStr) : {};
+  } catch {
+    return {};
+  }
+};
+
+// Helper to parse URL and extract credentials for Basic Auth
+function parseAppiumUrl(appiumUrl, customHeaders = {}) {
+  const parsed = new URL(appiumUrl);
+  const headers = { ...customHeaders };
+
+  // Extract credentials if present in URL (URL auth takes precedence if no Authorization header set)
+  if ((parsed.username || parsed.password) && !headers['Authorization']) {
+    const credentials = Buffer.from(`${parsed.username}:${parsed.password}`).toString('base64');
+    headers['Authorization'] = `Basic ${credentials}`;
+  }
+
+  // Remove credentials from URL
+  parsed.username = '';
+  parsed.password = '';
+
+  return {
+    baseUrl: parsed.toString().replace(/\/$/, ''),
+    headers
+  };
+}
+
 // Helper to make requests to Appium
-async function appiumRequest(appiumUrl, endpoint, method = 'GET') {
-  const url = `${appiumUrl}${endpoint}`;
-  const response = await fetch(url, { method });
+async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, customHeaders = {}) {
+  const { baseUrl, headers } = parseAppiumUrl(appiumUrl, customHeaders);
+  const url = `${baseUrl}${endpoint}`;
+
+  const options = {
+    method,
+    headers: { ...headers }
+  };
+
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(url, options);
   if (!response.ok) {
     throw new Error(`Appium request failed: ${response.status} ${response.statusText}`);
   }
@@ -40,18 +90,21 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET') {
 app.get('/sessions', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
-    const data = await appiumRequest(appiumUrl, '/sessions');
+    const customHeaders = getCustomHeaders(req);
+    const data = await appiumRequest(appiumUrl, '/sessions', 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+
 // GET /session/:id/source - Get page source
 app.get('/session/:id/source', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
-    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/source`);
+    const customHeaders = getCustomHeaders(req);
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/source`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -62,7 +115,8 @@ app.get('/session/:id/source', async (req, res) => {
 app.get('/session/:id/contexts', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
-    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/contexts`);
+    const customHeaders = getCustomHeaders(req);
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/contexts`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -73,17 +127,9 @@ app.get('/session/:id/contexts', async (req, res) => {
 app.post('/session/:id/context', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
+    const customHeaders = getCustomHeaders(req);
     const { name } = req.body;
-    const url = `${appiumUrl}/session/${req.params.id}/context`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    if (!response.ok) {
-      throw new Error(`Appium request failed: ${response.status}`);
-    }
-    const data = await response.json();
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/context`, 'POST', { name }, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -94,7 +140,8 @@ app.post('/session/:id/context', async (req, res) => {
 app.get('/session/:id/screenshot', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
-    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/screenshot`);
+    const customHeaders = getCustomHeaders(req);
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/screenshot`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -105,7 +152,21 @@ app.get('/session/:id/screenshot', async (req, res) => {
 app.get('/session/:id/element/:eid/screenshot', async (req, res) => {
   try {
     const appiumUrl = getAppiumUrl(req);
-    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/element/${req.params.eid}/screenshot`);
+    const customHeaders = getCustomHeaders(req);
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/element/${req.params.eid}/screenshot`, 'GET', null, customHeaders);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /session/:id/execute - Execute script (for session validation)
+app.post('/session/:id/execute', async (req, res) => {
+  try {
+    const appiumUrl = getAppiumUrl(req);
+    const customHeaders = getCustomHeaders(req);
+    const { script, args } = req.body;
+    const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/execute/sync`, 'POST', { script, args }, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -115,6 +176,7 @@ app.get('/session/:id/element/:eid/screenshot', async (req, res) => {
 // POST /session/:id/capture - Capture source and screenshot for a context
 app.post('/session/:id/capture', async (req, res) => {
   const appiumUrl = getAppiumUrl(req);
+  const customHeaders = getCustomHeaders(req);
   const { contextName } = req.body;
   const sessionId = req.params.id;
 
@@ -137,10 +199,11 @@ app.post('/session/:id/capture', async (req, res) => {
 
   // Set context first
   try {
-    const contextUrl = `${appiumUrl}/session/${sessionId}/context`;
+    const { baseUrl, headers } = parseAppiumUrl(appiumUrl, customHeaders);
+    const contextUrl = `${baseUrl}/session/${sessionId}/context`;
     const contextResponse = await fetch(contextUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: contextName })
     });
     if (!contextResponse.ok) {
@@ -155,14 +218,14 @@ app.post('/session/:id/capture', async (req, res) => {
 
   // Get source
   try {
-    sourceData = await appiumRequest(appiumUrl, `/session/${sessionId}/source`);
+    sourceData = await appiumRequest(appiumUrl, `/session/${sessionId}/source`, 'GET', null, customHeaders);
   } catch (err) {
     errors.push({ step: 'get_source', message: err.message });
   }
 
   // Get screenshot
   try {
-    screenshotData = await appiumRequest(appiumUrl, `/session/${sessionId}/screenshot`);
+    screenshotData = await appiumRequest(appiumUrl, `/session/${sessionId}/screenshot`, 'GET', null, customHeaders);
   } catch (err) {
     errors.push({ step: 'get_screenshot', message: err.message });
   }
@@ -363,3 +426,4 @@ const { host, port } = globalConf.api;
 app.listen(port, host, () => {
   console.log(`API server running at http://${host}:${port}`);
 });
+
