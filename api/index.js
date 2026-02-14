@@ -14,6 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 const APP_DATA_PATH = path.resolve(__dirname, '../app_data');
+const VIEWER_HTML_PATH = path.resolve(__dirname, '../public/viewer.html');
 
 // Ensure app_data directory exists
 if (!fs.existsSync(APP_DATA_PATH)) {
@@ -22,7 +23,7 @@ if (!fs.existsSync(APP_DATA_PATH)) {
 
 // Store active appium URL per request (passed via header)
 const getAppiumUrl = (req) => {
-  return req.headers['x-appium-url'] || 'http://127.0.0.1:4723';
+  return req.headers['x-appium-url'] || 'http://localhost:4723/wd/hub';
 };
 
 // Helper to make requests to Appium
@@ -113,51 +114,115 @@ app.get('/session/:id/element/:eid/screenshot', async (req, res) => {
 
 // POST /session/:id/capture - Capture source and screenshot for a context
 app.post('/session/:id/capture', async (req, res) => {
-  try {
-    const appiumUrl = getAppiumUrl(req);
-    const { contextName } = req.body;
-    const sessionId = req.params.id;
+  const appiumUrl = getAppiumUrl(req);
+  const { contextName } = req.body;
+  const sessionId = req.params.id;
 
-    // Set context first
+  const errors = [];
+  let sourceData = null;
+  let screenshotData = null;
+  let contextSwitchSuccess = false;
+
+  // Create folder with format: contextName__timestamp
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const sanitizedContext = contextName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const folderName = `${sanitizedContext}__${timestamp}`;
+  const folderPath = path.join(APP_DATA_PATH, folderName);
+
+  try {
+    fs.mkdirSync(folderPath, { recursive: true });
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to create folder: ${err.message}` });
+  }
+
+  // Set context first
+  try {
     const contextUrl = `${appiumUrl}/session/${sessionId}/context`;
-    await fetch(contextUrl, {
+    const contextResponse = await fetch(contextUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: contextName })
     });
+    if (!contextResponse.ok) {
+      const errorBody = await contextResponse.text();
+      errors.push({ step: 'context_switch', status: contextResponse.status, message: errorBody });
+    } else {
+      contextSwitchSuccess = true;
+    }
+  } catch (err) {
+    errors.push({ step: 'context_switch', message: err.message });
+  }
 
-    // Get source
-    const sourceData = await appiumRequest(appiumUrl, `/session/${sessionId}/source`);
+  // Get source
+  try {
+    sourceData = await appiumRequest(appiumUrl, `/session/${sessionId}/source`);
+  } catch (err) {
+    errors.push({ step: 'get_source', message: err.message });
+  }
 
-    // Get screenshot
-    const screenshotData = await appiumRequest(appiumUrl, `/session/${sessionId}/screenshot`);
+  // Get screenshot
+  try {
+    screenshotData = await appiumRequest(appiumUrl, `/session/${sessionId}/screenshot`);
+  } catch (err) {
+    errors.push({ step: 'get_screenshot', message: err.message });
+  }
 
-    // Create folder with format: contextName__timestamp
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const sanitizedContext = contextName.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const folderName = `${sanitizedContext}__${timestamp}`;
-    const folderPath = path.join(APP_DATA_PATH, folderName);
+  // Save source if available
+  if (sourceData?.value) {
+    fs.writeFileSync(path.join(folderPath, 'source.xml'), sourceData.value);
+  }
 
-    fs.mkdirSync(folderPath, { recursive: true });
-
-    // Save source
-    fs.writeFileSync(path.join(folderPath, 'source.xml'), sourceData.value || '');
-
-    // Save screenshot
-    const screenshotBase64 = screenshotData.value || '';
-    const screenshotBuffer = Buffer.from(screenshotBase64, 'base64');
+  // Save screenshot if available
+  if (screenshotData?.value) {
+    const screenshotBuffer = Buffer.from(screenshotData.value, 'base64');
     fs.writeFileSync(path.join(folderPath, 'screenshot.png'), screenshotBuffer);
+  }
 
-    // Save metadata
-    const metadata = {
-      sessionId,
-      contextName,
-      capturedAt: new Date().toISOString(),
-      folderName
-    };
-    fs.writeFileSync(path.join(folderPath, 'metadata.json'), JSON.stringify(metadata, null, 2));
+  // Save metadata with error information
+  const hasErrors = errors.length > 0;
+  const metadata = {
+    sessionId,
+    contextName,
+    capturedAt: new Date().toISOString(),
+    folderName,
+    hasErrors,
+    errors: hasErrors ? errors : undefined,
+    contextSwitchSuccess,
+    hasSource: !!sourceData?.value,
+    hasScreenshot: !!screenshotData?.value
+  };
+  fs.writeFileSync(path.join(folderPath, 'metadata.json'), JSON.stringify(metadata, null, 2));
 
-    res.json({ success: true, folderName, metadata });
+  // Also save raw errors to a separate file for debugging
+  if (hasErrors) {
+    fs.writeFileSync(path.join(folderPath, 'errors.json'), JSON.stringify(errors, null, 2));
+  }
+
+  // Copy viewer.html to the capture folder
+  if (fs.existsSync(VIEWER_HTML_PATH)) {
+    fs.copyFileSync(VIEWER_HTML_PATH, path.join(folderPath, 'viewer.html'));
+  }
+
+  res.json({
+    success: !hasErrors,
+    hasErrors,
+    folderName,
+    metadata,
+    errors: hasErrors ? errors : undefined
+  });
+});
+
+// Serve capture folder files (for viewer)
+app.get('/view/:name/:file', (req, res) => {
+  try {
+    const folderPath = path.join(APP_DATA_PATH, req.params.name);
+    const filePath = path.join(folderPath, req.params.file);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send('File not found');
+    }
+
+    res.sendFile(filePath);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -253,6 +318,42 @@ app.post('/captures/:name/rename', (req, res) => {
     }
 
     res.json({ success: true, newName });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /captures - Delete all capture folders
+app.delete('/captures', (req, res) => {
+  try {
+    const folders = fs.readdirSync(APP_DATA_PATH)
+      .filter(name => {
+        const fullPath = path.join(APP_DATA_PATH, name);
+        return fs.statSync(fullPath).isDirectory();
+      });
+
+    for (const folder of folders) {
+      fs.rmSync(path.join(APP_DATA_PATH, folder), { recursive: true, force: true });
+    }
+
+    res.json({ success: true, deleted: folders.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /captures/:name - Delete a capture folder
+app.delete('/captures/:name', (req, res) => {
+  try {
+    const folderPath = path.join(APP_DATA_PATH, req.params.name);
+
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+
+    fs.rmSync(folderPath, { recursive: true, force: true });
+
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

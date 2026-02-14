@@ -40,6 +40,10 @@ export const api = {
     return `${API_BASE}/captures/${encodeURIComponent(captureName)}/screenshot`;
   },
 
+  getViewerUrl(captureName) {
+    return `${API_BASE}/view/${captureName}/viewer.html`;
+  },
+
   async renameCapture(oldName, newName) {
     const response = await fetch(`${API_BASE}/captures/${encodeURIComponent(oldName)}/rename`, {
       method: 'POST',
@@ -47,6 +51,22 @@ export const api = {
       body: JSON.stringify({ newName })
     });
     if (!response.ok) throw new Error('Failed to rename capture');
+    return response.json();
+  },
+
+  async deleteCapture(name) {
+    const response = await fetch(`${API_BASE}/captures/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+    if (!response.ok) throw new Error('Failed to delete capture');
+    return response.json();
+  },
+
+  async deleteAllCaptures() {
+    const response = await fetch(`${API_BASE}/captures`, {
+      method: 'DELETE'
+    });
+    if (!response.ok) throw new Error('Failed to delete all captures');
     return response.json();
   }
 };

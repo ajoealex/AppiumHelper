@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { api } from '../api';
 
+const APPIUM_URL_KEY = 'appiumHelper_lastAppiumUrl';
+
 export default function Home({ onConnect }) {
-  const [appiumUrl, setAppiumUrl] = useState('http://127.0.0.1:4723');
+  const [appiumUrl, setAppiumUrl] = useState(() => {
+    return localStorage.getItem(APPIUM_URL_KEY) || 'http://localhost:4723/wd/hub';
+  });
   const [sessions, setSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,6 +25,7 @@ export default function Home({ onConnect }) {
       const sessionList = data.value || [];
       setSessions(sessionList);
       setConnected(true);
+      localStorage.setItem(APPIUM_URL_KEY, appiumUrl);
       if (sessionList.length > 0) {
         setSelectedSession(sessionList[0].id);
       }
@@ -53,7 +58,7 @@ export default function Home({ onConnect }) {
               type="text"
               value={appiumUrl}
               onChange={(e) => setAppiumUrl(e.target.value)}
-              placeholder="http://127.0.0.1:4723"
+              placeholder="http://localhost:4723/wd/hub"
               className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
