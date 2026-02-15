@@ -7,6 +7,7 @@ RUN cd web && npm ci
 
 COPY web ./web
 
+ENV NO_GLOBAL_CONF=1
 ENV WEB_HOST=0.0.0.0
 ENV WEB_PORT=5173
 

@@ -4,7 +4,30 @@ import tailwindcss from '@tailwindcss/vite'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const globalConf = require('../global.conf.js')
+const DEFAULT_GLOBAL_CONF = {
+  web: {
+    host: '127.0.0.1',
+    port: 5173
+  },
+  api: {
+    host: '127.0.0.1',
+    port: 3001
+  }
+}
+
+const shouldLoadGlobalConf = process.env.NO_GLOBAL_CONF !== '1'
+let globalConf = DEFAULT_GLOBAL_CONF
+
+if (shouldLoadGlobalConf) {
+  try {
+    const loadedGlobalConf = require('../global.conf.js')
+    globalConf = loadedGlobalConf || DEFAULT_GLOBAL_CONF
+  } catch (error) {
+    if (error?.code !== 'MODULE_NOT_FOUND') {
+      throw error
+    }
+  }
+}
 
 export default defineConfig(() => {
   const webHost = process.env.WEB_HOST || globalConf.web.host

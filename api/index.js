@@ -7,7 +7,30 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const globalConf = (await import('../global.conf.js')).default;
+const DEFAULT_GLOBAL_CONF = {
+  web: {
+    host: '127.0.0.1',
+    port: 5173
+  },
+  api: {
+    host: '127.0.0.1',
+    port: 3001
+  }
+};
+
+const shouldLoadGlobalConf = process.env.NO_GLOBAL_CONF !== '1';
+let globalConf = DEFAULT_GLOBAL_CONF;
+
+if (shouldLoadGlobalConf) {
+  try {
+    const loadedGlobalConf = (await import('../global.conf.js')).default;
+    globalConf = loadedGlobalConf || DEFAULT_GLOBAL_CONF;
+  } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') {
+      throw error;
+    }
+  }
+}
 
 const app = express();
 app.use(cors());
