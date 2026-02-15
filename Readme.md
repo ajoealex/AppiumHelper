@@ -16,7 +16,7 @@ AppiumHelper/
 
 ## Environment Configuration (dotenv)
 
-This project uses shared environment variables instead of `global.conf.js`.
+This project uses shared environment variables via dotenv.
 
 1. Create `.env` from `.env.example`.
 2. Optionally create `.env.local` for machine-specific overrides.
@@ -91,3 +91,4 @@ Captures are stored in `app_data/` with this format:
 |-- screenshot.png
 `-- metadata.json
 ```
+
