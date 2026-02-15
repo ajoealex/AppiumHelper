@@ -15,6 +15,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [success, setSuccess] = useState('');
   const [currentScreenshot, setCurrentScreenshot] = useState(null);
   const [previewCapture, setPreviewCapture] = useState(null);
+  const [autoRefreshScreenshot, setAutoRefreshScreenshot] = useState(false);
 
   // Execute Script state
   const [executeScript, setExecuteScript] = useState('mobile: deviceScreenInfo');
@@ -82,6 +83,15 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     return () => clearInterval(interval);
   }, [loadLogs]);
 
+  // Auto-refresh screenshot every 10 seconds when enabled
+  useEffect(() => {
+    if (!autoRefreshScreenshot) return;
+    const interval = setInterval(() => {
+      fetchScreenshot();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [autoRefreshScreenshot]);
+
   // Auto-dismiss messages after 5 seconds
   useEffect(() => {
     if (success) {
@@ -133,6 +143,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const handlePreview = (capture) => {
     setPreviewCapture(capture);
     setCurrentScreenshot(null); // Clear live screenshot when previewing
+    setAutoRefreshScreenshot(false); // Turn off auto-refresh when viewing a capture
   };
 
   const handleCapture = async () => {
@@ -452,14 +463,35 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
               <h2 className="text-lg font-semibold text-white">
                 {previewCapture ? `Preview: ${previewCapture.name}` : 'Screenshot'}
               </h2>
-              {previewCapture && (
-                <button
-                  onClick={() => setPreviewCapture(null)}
-                  className="text-gray-400 hover:text-white text-sm cursor-pointer"
-                >
-                  Clear
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {!previewCapture && (
+                  <button
+                    onClick={() => {
+                      if (!autoRefreshScreenshot) fetchScreenshot();
+                      setAutoRefreshScreenshot(!autoRefreshScreenshot);
+                    }}
+                    className={`px-3 py-1 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                      autoRefreshScreenshot
+                        ? 'bg-green-600 hover:bg-green-700 text-white'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                    }`}
+                    title={autoRefreshScreenshot ? 'Stop auto-refresh' : 'Auto-refresh every 10s'}
+                  >
+                    <svg className={`w-4 h-4 ${autoRefreshScreenshot ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    {autoRefreshScreenshot ? 'Live' : 'Auto'}
+                  </button>
+                )}
+                {previewCapture && (
+                  <button
+                    onClick={() => setPreviewCapture(null)}
+                    className="text-gray-400 hover:text-white text-sm cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex-1 flex items-center justify-center bg-gray-900 rounded-lg overflow-hidden min-h-64">
