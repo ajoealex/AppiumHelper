@@ -57,6 +57,14 @@ Run Docker from repo root so both services use the same `.env` values:
 docker compose --env-file .env -f docker_setup/docker-compose.yml up --build
 ```
 
+Or use npm scripts:
+
+```bash
+npm run docker:up
+npm run docker:down
+npm run docker:remove
+```
+
 ## Usage
 
 1. Open the web UI at `http://127.0.0.1:5173`.
@@ -103,28 +111,28 @@ Scope:
 
 ---
 
-## 1. W3C STANDARD ACTIONS API (RECOMMENDED)
+### 1. W3C STANDARD ACTIONS API (RECOMMENDED)
 
-### Endpoint
+#### Endpoint
 ```
 POST /session/{sessionId}/actions
 ```
 
-### Characteristics
+#### Characteristics
 - W3C compliant
 - Vendor-neutral
 - Cloud-safe
 - Future-proof
 - Works identically on Android and iOS
 
-### Pointer Configuration
+#### Pointer Configuration
 ```json
 "parameters": { "pointerType": "touch" }
 ```
 
 ---
 
-### Supported Gestures (Android + iOS)
+#### Supported Gestures (Android + iOS)
 
 | Gesture | Supported | Notes |
 |------|-----------|------|
@@ -138,7 +146,7 @@ Multi-touch (pinch/zoom) | Yes | multiple pointers |
 
 ---
 
-### Example: Tap at Coordinates
+#### Example: Tap at Coordinates
 ```json
 {
   "actions": [
@@ -158,14 +166,14 @@ Multi-touch (pinch/zoom) | Yes | multiple pointers |
 
 ---
 
-## 2. APPIUM `mobile:` EXTENSION COMMANDS
+### 2. APPIUM `mobile:` EXTENSION COMMANDS
 
-### Endpoint
+#### Endpoint
 ```
 POST /session/{sessionId}/execute
 ```
 
-### Characteristics
+#### Characteristics
 - Appium-specific
 - Not part of W3C WebDriver
 - Driver-dependent
@@ -173,7 +181,7 @@ POST /session/{sessionId}/execute
 
 ---
 
-### 2.1 Android Only (UIAutomator2)
+#### 2.1 Android Only (UIAutomator2)
 
 | Command | Gesture |
 |------|--------|
@@ -184,7 +192,7 @@ mobile: scrollGesture | Scroll |
 mobile: flingGesture | Fling |
 mobile: dragGesture | Drag |
 
-#### Example
+##### Example
 ```json
 {
   "script": "mobile: swipeGesture",
@@ -200,7 +208,7 @@ mobile: dragGesture | Drag |
 
 ---
 
-### 2.2 iOS Only (XCUITest)
+#### 2.2 iOS Only (XCUITest)
 
 | Command | Gesture |
 |------|--------|
@@ -213,7 +221,7 @@ mobile: pinch | Pinch |
 
 ---
 
-### 2.3 Cross-Platform (Limited Reliability)
+#### 2.3 Cross-Platform (Limited Reliability)
 
 | Command | Android | iOS | Notes |
 |------|--------|-----|------|
@@ -224,26 +232,26 @@ mobile: pinchOpen / pinchClose | Partial | Partial | Often blocked |
 
 ---
 
-## 3. ELEMENT-BOUND TOUCH (HYBRID)
+### 3. ELEMENT-BOUND TOUCH (HYBRID)
 
-### Endpoint
+#### Endpoint
 ```
 POST /session/{sessionId}/actions
 ```
 
-### Characteristics
+#### Characteristics
 - Uses W3C Actions
 - Origin = element
 - More stable than coordinate-only gestures
 
-### Supported
+#### Supported
 - Android: Yes
 - iOS: Yes
 - Cloud vendors: Yes
 
 ---
 
-## 4. LEGACY / DEPRECATED APIs (DO NOT USE)
+### 4. LEGACY / DEPRECATED APIs (DO NOT USE)
 
 | Endpoint | Status |
 |------|--------|
@@ -258,7 +266,7 @@ Reasons:
 
 ---
 
-## 5. COMPATIBILITY MATRIX
+### 5. COMPATIBILITY MATRIX
 
 | API Family | Android | iOS | Cloud Vendors |
 |---------|--------|-----|---------------|
@@ -270,30 +278,11 @@ Legacy Touch | No | No | No |
 
 ---
 
-## 6. STRATEGIC RECOMMENDATIONS
+### 6. STRATEGIC RECOMMENDATIONS
 
 - Default to W3C Actions
 - Use `mobile:` commands only when OS-specific behavior is required
-- Never rely on deprecated touch APIs
-- Assume cloud vendors may restrict `mobile:` execution
-- For recorders and inspectors, capture gestures as W3C Actions
 
 ---
 
-## 7. FINAL TAKEAWAY
-
-If you are building:
-- Mobile automation frameworks
-- Recorders
-- Inspectors
-- Debuggers
-- Orchestration layers
-
-Your hierarchy must be:
-
-1. W3C Actions API
-2. Controlled Appium `mobile:` extensions
-3. Zero dependency on legacy touch APIs
-
-This approach guarantees maximum portability, stability, and cloud compatibility.
 
