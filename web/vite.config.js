@@ -31,14 +31,12 @@ function getRequiredPort(name) {
 export default defineConfig(() => {
   const webHost = getRequiredEnv('WEB_HOST')
   const webPort = getRequiredPort('WEB_PORT')
-  const apiHost = getRequiredEnv('API_HOST')
   const apiPort = getRequiredPort('API_PORT')
-  const apiBase = `http://${apiHost}:${apiPort}`
 
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'import.meta.env.API_BASE': JSON.stringify(apiBase)
+      'import.meta.env.API_PORT': JSON.stringify(String(apiPort))
     },
     server: {
       host: webHost,

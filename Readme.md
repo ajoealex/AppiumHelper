@@ -77,7 +77,30 @@ npm run docker:remove
 1. Open the web UI at `http://127.0.0.1:5173`.
 2. Enter your Appium server URL, for example `http://127.0.0.1:4723`.
 3. Click "Check Connection", pick a session, and connect.
-4. Capture sources/screenshots and inspect saved captures.
+4. In Capture Controls, refresh/get contexts, choose one, then capture source/screenshots.
+5. Use the Elements section to find, save, and act on elements.
+6. Inspect actions in the WebDriver API logs.
+
+## Session Controls Highlights
+
+- Context handling:
+  - Context list is fetched only (no automatic switching).
+  - `Get Current` fetches current context via WebDriver and updates the selected context.
+  - Capture uses the context selected by the user.
+- Screenshot preview:
+  - `Live` mode supports configurable refetch interval in seconds.
+- Elements section (between captures preview and advanced tools):
+  - Left panel:
+    - Find elements on mobile screen (`POST /session/{sessionId}/elements`)
+    - Find child elements under parent (`POST /session/{sessionId}/element/{elementId}/elements`)
+    - Supports standard WebDriver locators plus mobile-specific Appium locators.
+    - Parent field accepts saved element name or raw element id.
+  - Right panel:
+    - Save elements automatically (single-match find) or manually (name + id).
+    - Per-element actions: Exists, Tap, Click, Rename, Delete.
+    - Coordinate actions: Tap and Click by X/Y.
+- Logs:
+  - Element-related WebDriver actions (find/exists/tap/click and coordinate tap/click) trigger log refresh so calls appear immediately.
 
 ## API Endpoints
 
@@ -89,6 +112,7 @@ npm run docker:remove
 | `/session/:id/screenshot` | GET | Get screenshot (base64) |
 | `/session/:id/element/:eid/screenshot` | GET | Get element screenshot |
 | `/session/:id/capture` | POST | Capture source and screenshot |
+| `/session/:id/generic` | POST | Generic WebDriver API proxy |
 | `/captures` | GET | List all captures |
 | `/captures/:name/screenshot` | GET | Get capture screenshot |
 | `/captures/:name/source` | GET | Get capture source XML |
