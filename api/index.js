@@ -15,10 +15,30 @@ app.use(express.json());
 
 const APP_DATA_PATH = path.resolve(__dirname, '../app_data');
 const VIEWER_HTML_PATH = path.resolve(__dirname, '../public/viewer.html');
+const LOGS_PATH = path.resolve(__dirname, 'logs');
 
 // Ensure app_data directory exists
 if (!fs.existsSync(APP_DATA_PATH)) {
   fs.mkdirSync(APP_DATA_PATH, { recursive: true });
+}
+
+// Ensure logs directory exists
+if (!fs.existsSync(LOGS_PATH)) {
+  fs.mkdirSync(LOGS_PATH, { recursive: true });
+}
+
+// Logger function for Appium requests
+function logAppiumRequest(logEntry) {
+  const date = new Date();
+  const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
+  const logFile = path.join(LOGS_PATH, `appium-${dateStr}.log`);
+
+  const logLine = JSON.stringify({
+    timestamp: date.toISOString(),
+    ...logEntry
+  }) + '\n';
+
+  fs.appendFileSync(logFile, logLine);
 }
 
 // Store active appium URL per request
@@ -79,11 +99,33 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    throw new Error(`Appium request failed: ${response.status} ${response.statusText}`);
+  let status = null;
+  let error = null;
+
+  try {
+    const response = await fetch(url, options);
+    status = response.status;
+
+    if (!response.ok) {
+      error = `${response.status} ${response.statusText}`;
+      throw new Error(`Appium request failed: ${error}`);
+    }
+
+    return response.json();
+  } catch (err) {
+    error = error || err.message;
+    throw err;
+  } finally {
+    // Log every request to Appium
+    logAppiumRequest({
+      url,
+      method,
+      payload: body,
+      headers: { ...headers, Authorization: headers.Authorization ? '[REDACTED]' : undefined },
+      status,
+      error
+    });
   }
-  return response.json();
 }
 
 // GET /sessions - List sessions from Appium
