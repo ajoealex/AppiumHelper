@@ -551,8 +551,9 @@ app.delete('/captures/:name', (req, res) => {
   }
 });
 
-const { host, port } = globalConf.api;
+const host = process.env.API_HOST || globalConf.api.host;
+const port = Number(process.env.API_PORT || globalConf.api.port);
+
 app.listen(port, host, () => {
   console.log(`API server running at http://${host}:${port}`);
 });
-
