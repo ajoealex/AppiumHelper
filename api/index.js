@@ -2,35 +2,35 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
+import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, '..');
 
-const DEFAULT_GLOBAL_CONF = {
-  web: {
-    host: '127.0.0.1',
-    port: 5173
-  },
-  api: {
-    host: '127.0.0.1',
-    port: 3001
+dotenv.config({ path: path.join(ROOT_DIR, '.env') });
+dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
+
+function getRequiredEnv(name) {
+  const value = process.env[name];
+  if (!value || !value.trim()) {
+    throw new Error(`[ENV] Missing required environment variable: ${name}`);
   }
-};
-
-const shouldLoadGlobalConf = process.env.NO_GLOBAL_CONF !== '1';
-let globalConf = DEFAULT_GLOBAL_CONF;
-
-if (shouldLoadGlobalConf) {
-  try {
-    const loadedGlobalConf = (await import('../global.conf.js')).default;
-    globalConf = loadedGlobalConf || DEFAULT_GLOBAL_CONF;
-  } catch (error) {
-    if (error?.code !== 'ERR_MODULE_NOT_FOUND') {
-      throw error;
-    }
-  }
+  return value.trim();
 }
+
+function getRequiredPort(name) {
+  const raw = getRequiredEnv(name);
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`[ENV] ${name} must be an integer between 1 and 65535. Received: "${raw}"`);
+  }
+  return port;
+}
+
+const API_HOST = getRequiredEnv('API_HOST');
+const API_PORT = getRequiredPort('API_PORT');
 
 const app = express();
 app.use(cors());
@@ -574,8 +574,8 @@ app.delete('/captures/:name', (req, res) => {
   }
 });
 
-const host = process.env.API_HOST || globalConf.api.host;
-const port = Number(process.env.API_PORT || globalConf.api.port);
+const host = API_HOST;
+const port = API_PORT;
 
 app.listen(port, host, () => {
   console.log(`API server running at http://${host}:${port}`);

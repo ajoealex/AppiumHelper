@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE;
+const API_BASE = import.meta.env.API_BASE;
 
 export const api = {
   async getSessions(appiumUrl, customHeaders = {}) {

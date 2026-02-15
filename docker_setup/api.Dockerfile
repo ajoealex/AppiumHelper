@@ -10,10 +10,6 @@ COPY public ./public
 
 RUN mkdir -p /app/app_data
 
-ENV NO_GLOBAL_CONF=1
-ENV API_HOST=0.0.0.0
-ENV API_PORT=3001
-
-EXPOSE ${API_PORT}
+EXPOSE 3001
 
 CMD ["npm", "--prefix", "api", "start"]

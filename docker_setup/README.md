@@ -1,33 +1,29 @@
 # Docker setup
 
 This setup runs both services:
-- Web UI on `${WEB_PORT:-5173}`
-- API on `${API_PORT:-3001}`
+- Web UI on `${WEB_PORT}`
+- API on `${API_PORT}`
 - Both containers are attached to the `appium_helper_net` Docker network.
 
 `app_data` is bind-mounted to the host at `../app_data`.
-Containers run with `NO_GLOBAL_CONF=1`, so `global.conf.js` is not used inside Docker.
-
-Web service receives API connection settings via environment variables:
-- `VITE_API_PROTOCOL`
-- `VITE_API_HOST`
-- `VITE_API_PORT`
+Both services use the same env variable names as local development.
+If any required env var is missing, compose startup fails.
 
 ## Start
 
-From `docker_setup`:
+From repo root (so `--env-file .env` uses your shared root `.env`):
 
 ```bash
-docker compose up --build
+docker compose --env-file .env -f docker_setup/docker-compose.yml up --build
 ```
 
 ## Stop
 
 ```bash
-docker compose down
+docker compose -f docker_setup/docker-compose.yml down
 ```
 
 ## Access
 
-- Web URL: `http://localhost:${WEB_PORT:-5173}`
-- API: `http://localhost:${API_PORT:-3001}`
+- Web URL: `http://localhost:${WEB_PORT}`
+- API: `http://localhost:${API_PORT}`

@@ -1,68 +1,70 @@
 # Appium Helper
 
-A web-based tool for interacting with Appium sessions, capturing page sources and screenshots.
+Web UI + API wrapper for interacting with Appium sessions, capturing source and screenshots.
 
 ## Project Structure
 
-```
+```text
 AppiumHelper/
-├── web/                # React frontend (Vite + React + Tailwind CSS)
-├── api/                # Node.js API server (Express)
-├── app_data/           # Storage for captures
-├── global.conf.js      # Server configuration
-└── Readme.md
+|-- web/                # React frontend (Vite + Tailwind)
+|-- api/                # Node.js API (Express)
+|-- app_data/           # Capture storage
+|-- docker_setup/       # Dockerfiles + docker-compose
+|-- .env.example        # Shared env template (local + Docker)
+`-- Readme.md
 ```
 
-## Configuration
+## Environment Configuration (dotenv)
 
-Edit `global.conf.js` to configure server ports and interfaces:
+This project uses shared environment variables instead of `global.conf.js`.
 
-```javascript
-module.exports = {
-  web: {
-    host: '127.0.0.1',
-    port: 5173
-  },
-  api: {
-    host: '127.0.0.1',
-    port: 3001
-  }
-};
-```
+1. Create `.env` from `.env.example`.
+2. Optionally create `.env.local` for machine-specific overrides.
+3. `api` and `web` both load root `.env` and `.env.local` via `dotenv`.
+4. All vars below are required. Startup fails with a clear error if any are missing.
 
-## Setup
+Supported variables:
 
 ```bash
-# Install all dependencies (root + api + web)
+API_HOST=127.0.0.1
+API_PORT=3001
+WEB_HOST=127.0.0.1
+WEB_PORT=5173
+```
+
+The frontend API base is always derived as `http://API_HOST:API_PORT`.
+
+## Local Setup
+
+```bash
 npm install
 npm run install:all
-
-# Start both servers
 npm run dev
 ```
 
-### Individual Commands
+Individual commands:
 
 ```bash
-npm run dev:api   # Start API server only
-npm run dev:web   # Start Web server only
+npm run dev:api
+npm run dev:web
+```
+
+## Docker Setup
+
+Run Docker from repo root so both services use the same `.env` values:
+
+```bash
+docker compose --env-file .env -f docker_setup/docker-compose.yml up --build
 ```
 
 ## Usage
 
-1. Open the web interface at `http://127.0.0.1:5173`
-2. Enter your Appium server URL (e.g., `http://127.0.0.1:4723`)
-3. Click "Check Connection" to list available sessions
-4. Select a session and click "Connect"
-5. On the session page:
-   - Select a context from the dropdown
-   - Click "Capture Source" to save the page source and screenshot
-   - View previous captures in the captures list
-   - Click a capture to view its screenshot and rename the folder
+1. Open the web UI at `http://127.0.0.1:5173`.
+2. Enter your Appium server URL, for example `http://127.0.0.1:4723`.
+3. Click "Check Connection", pick a session, and connect.
+4. Capture sources/screenshots and inspect saved captures.
 
 ## API Endpoints
-
-The API server wraps Appium WebDriver APIs:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -77,14 +79,15 @@ The API server wraps Appium WebDriver APIs:
 | `/captures/:name/source` | GET | Get capture source XML |
 | `/captures/:name/rename` | POST | Rename a capture folder |
 
-All endpoints that proxy to Appium require the `X-Appium-URL` header to specify the Appium server URL.
+All endpoints that proxy to Appium require the `X-Appium-URL` header.
 
 ## Captures
 
-Captures are stored in `app_data/` with the format:
-```
+Captures are stored in `app_data/` with this format:
+
+```text
 <context_name>__<timestamp>/
-├── source.xml       # Page source XML
-├── screenshot.png   # Screenshot image
-└── metadata.json    # Capture metadata
+|-- source.xml
+|-- screenshot.png
+`-- metadata.json
 ```

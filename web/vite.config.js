@@ -1,46 +1,44 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { createRequire } from 'node:module'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
 
-const require = createRequire(import.meta.url)
-const DEFAULT_GLOBAL_CONF = {
-  web: {
-    host: '127.0.0.1',
-    port: 5173
-  },
-  api: {
-    host: '127.0.0.1',
-    port: 3001
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const ROOT_DIR = path.resolve(__dirname, '..')
+dotenv.config({ path: path.join(ROOT_DIR, '.env') })
+dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true })
+
+function getRequiredEnv(name) {
+  const value = process.env[name]
+  if (!value || !value.trim()) {
+    throw new Error(`[ENV] Missing required environment variable: ${name}`)
   }
+  return value.trim()
 }
 
-const shouldLoadGlobalConf = process.env.NO_GLOBAL_CONF !== '1'
-let globalConf = DEFAULT_GLOBAL_CONF
-
-if (shouldLoadGlobalConf) {
-  try {
-    const loadedGlobalConf = require('../global.conf.js')
-    globalConf = loadedGlobalConf || DEFAULT_GLOBAL_CONF
-  } catch (error) {
-    if (error?.code !== 'MODULE_NOT_FOUND') {
-      throw error
-    }
+function getRequiredPort(name) {
+  const raw = getRequiredEnv(name)
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`[ENV] ${name} must be an integer between 1 and 65535. Received: "${raw}"`)
   }
+  return port
 }
 
 export default defineConfig(() => {
-  const webHost = process.env.WEB_HOST || globalConf.web.host
-  const webPort = Number(process.env.WEB_PORT || globalConf.web.port)
-  const apiHost = process.env.VITE_API_HOST || globalConf.api.host
-  const apiPort = Number(process.env.VITE_API_PORT || globalConf.api.port)
-  const apiProtocol = process.env.VITE_API_PROTOCOL || 'http'
-  const apiBase = process.env.VITE_API_BASE || `${apiProtocol}://${apiHost}:${apiPort}`
+  const webHost = getRequiredEnv('WEB_HOST')
+  const webPort = getRequiredPort('WEB_PORT')
+  const apiHost = getRequiredEnv('API_HOST')
+  const apiPort = getRequiredPort('API_PORT')
+  const apiBase = `http://${apiHost}:${apiPort}`
 
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'import.meta.env.VITE_API_BASE': JSON.stringify(apiBase)
+      'import.meta.env.API_BASE': JSON.stringify(apiBase)
     },
     server: {
       host: webHost,
