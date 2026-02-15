@@ -16,6 +16,7 @@ app_data/
 # Logs
 *.log
 npm-debug.log*
+api/logs/
 
 # Editor directories
 .idea/

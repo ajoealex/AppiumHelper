@@ -1,32 +1,65 @@
 const API_BASE = 'http://127.0.0.1:3001';
 
 export const api = {
-  async getSessions(appiumUrl) {
+  async getSessions(appiumUrl, customHeaders = {}) {
     const response = await fetch(`${API_BASE}/sessions`, {
-      headers: { 'X-Appium-URL': appiumUrl }
+      headers: {
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      }
     });
     if (!response.ok) throw new Error('Failed to fetch sessions');
     return response.json();
   },
 
-  async getContexts(appiumUrl, sessionId) {
+
+  async getContexts(appiumUrl, sessionId, customHeaders = {}) {
     const response = await fetch(`${API_BASE}/session/${sessionId}/contexts`, {
-      headers: { 'X-Appium-URL': appiumUrl }
+      headers: {
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      }
     });
     if (!response.ok) throw new Error('Failed to fetch contexts');
     return response.json();
   },
 
-  async capture(appiumUrl, sessionId, contextName) {
+  async executeScript(appiumUrl, sessionId, script, args = [], customHeaders = {}) {
+    const response = await fetch(`${API_BASE}/session/${sessionId}/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      },
+      body: JSON.stringify({ script, args })
+    });
+    if (!response.ok) throw new Error('Failed to execute script');
+    return response.json();
+  },
+
+  async capture(appiumUrl, sessionId, contextName, customHeaders = {}) {
     const response = await fetch(`${API_BASE}/session/${sessionId}/capture`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Appium-URL': appiumUrl
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
       },
       body: JSON.stringify({ contextName })
     });
     if (!response.ok) throw new Error('Failed to capture');
+    return response.json();
+  },
+
+  async getScreenshot(appiumUrl, sessionId, customHeaders = {}) {
+    const response = await fetch(`${API_BASE}/session/${sessionId}/screenshot`, {
+      headers: {
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      }
+    });
+    if (!response.ok) throw new Error('Failed to get screenshot');
     return response.json();
   },
 
@@ -70,3 +103,4 @@ export const api = {
     return response.json();
   }
 };
+

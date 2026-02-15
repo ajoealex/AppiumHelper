@@ -5,8 +5,8 @@ import Session from './pages/Session';
 function App() {
   const [connection, setConnection] = useState(null);
 
-  const handleConnect = (appiumUrl, sessionId) => {
-    setConnection({ appiumUrl, sessionId });
+  const handleConnect = (appiumUrl, sessionId, customHeaders = {}) => {
+    setConnection({ appiumUrl, sessionId, customHeaders });
   };
 
   const handleDisconnect = () => {
@@ -18,6 +18,7 @@ function App() {
       <Session
         appiumUrl={connection.appiumUrl}
         sessionId={connection.sessionId}
+        customHeaders={connection.customHeaders}
         onDisconnect={handleDisconnect}
       />
     );
