@@ -52,6 +52,17 @@ export const api = {
     return response.json();
   },
 
+  async getScreenshot(appiumUrl, sessionId, customHeaders = {}) {
+    const response = await fetch(`${API_BASE}/session/${sessionId}/screenshot`, {
+      headers: {
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      }
+    });
+    if (!response.ok) throw new Error('Failed to get screenshot');
+    return response.json();
+  },
+
   async getCaptures() {
     const response = await fetch(`${API_BASE}/captures`);
     if (!response.ok) throw new Error('Failed to fetch captures');
