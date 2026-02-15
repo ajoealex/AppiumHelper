@@ -101,6 +101,7 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
 
   let status = null;
   let error = null;
+  let errorResponse = null;
 
   try {
     const response = await fetch(url, options);
@@ -108,6 +109,17 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
 
     if (!response.ok) {
       error = `${response.status} ${response.statusText}`;
+      // Try to capture error response body
+      try {
+        const errorText = await response.text();
+        try {
+          errorResponse = JSON.parse(errorText);
+        } catch {
+          errorResponse = errorText;
+        }
+      } catch {
+        // Ignore if we can't read the body
+      }
       throw new Error(`Appium request failed: ${error}`);
     }
 
@@ -123,7 +135,8 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
       payload: body,
       headers: { ...headers, Authorization: headers.Authorization ? '[REDACTED]' : undefined },
       status,
-      error
+      error,
+      errorResponse
     });
   }
 }
@@ -209,6 +222,37 @@ app.post('/session/:id/execute', async (req, res) => {
     const customHeaders = getCustomHeaders(req);
     const { script, args } = req.body;
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/execute/sync`, 'POST', { script, args }, customHeaders);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /session/:id/generic - Generic WebDriver API request
+app.post('/session/:id/generic', async (req, res) => {
+  try {
+    const appiumUrl = getAppiumUrl(req);
+    const customHeaders = getCustomHeaders(req);
+    const { endpoint, method, payload } = req.body;
+
+    // Build the full endpoint path
+    let fullEndpoint = endpoint;
+    if (!endpoint.startsWith('/')) {
+      fullEndpoint = '/' + endpoint;
+    }
+    // Replace {session id} placeholder with actual session id
+    fullEndpoint = fullEndpoint.replace(/\{session\s*id\}/gi, req.params.id);
+
+    let body = null;
+    if (method === 'POST' && payload) {
+      try {
+        body = typeof payload === 'string' ? JSON.parse(payload) : payload;
+      } catch {
+        body = payload;
+      }
+    }
+
+    const data = await appiumRequest(appiumUrl, fullEndpoint, method, body, customHeaders);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -315,6 +359,49 @@ app.post('/session/:id/capture', async (req, res) => {
     metadata,
     errors: hasErrors ? errors : undefined
   });
+});
+
+// GET /logs - Get last N log entries
+app.get('/logs', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const date = new Date();
+    const dateStr = date.toISOString().split('T')[0];
+    const logFile = path.join(LOGS_PATH, `appium-${dateStr}.log`);
+
+    if (!fs.existsSync(logFile)) {
+      return res.json([]);
+    }
+
+    const content = fs.readFileSync(logFile, 'utf-8');
+    const lines = content.trim().split('\n').filter(line => line.trim());
+    const lastLines = lines.slice(-limit);
+
+    const logs = lastLines.map(line => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return { raw: line };
+      }
+    }).reverse(); // Most recent first
+
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /logs - Delete all log files
+app.delete('/logs', (req, res) => {
+  try {
+    const files = fs.readdirSync(LOGS_PATH).filter(f => f.endsWith('.log'));
+    for (const file of files) {
+      fs.unlinkSync(path.join(LOGS_PATH, file));
+    }
+    res.json({ success: true, deleted: files.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Serve capture folder files (for viewer)

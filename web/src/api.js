@@ -24,6 +24,20 @@ export const api = {
     return response.json();
   },
 
+  async setContext(appiumUrl, sessionId, contextName, customHeaders = {}) {
+    const response = await fetch(`${API_BASE}/session/${sessionId}/context`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      },
+      body: JSON.stringify({ name: contextName })
+    });
+    if (!response.ok) throw new Error('Failed to set context');
+    return response.json();
+  },
+
   async executeScript(appiumUrl, sessionId, script, args = [], customHeaders = {}) {
     const response = await fetch(`${API_BASE}/session/${sessionId}/execute`, {
       method: 'POST',
@@ -100,6 +114,38 @@ export const api = {
       method: 'DELETE'
     });
     if (!response.ok) throw new Error('Failed to delete all captures');
+    return response.json();
+  },
+
+  async getLogs(limit = 10) {
+    const response = await fetch(`${API_BASE}/logs?limit=${limit}`);
+    if (!response.ok) throw new Error('Failed to fetch logs');
+    return response.json();
+  },
+
+  async deleteLogs() {
+    const response = await fetch(`${API_BASE}/logs`, {
+      method: 'DELETE'
+    });
+    if (!response.ok) throw new Error('Failed to delete logs');
+    return response.json();
+  },
+
+  async genericRequest(appiumUrl, sessionId, endpoint, method = 'GET', payload = null, customHeaders = {}) {
+    const body = method === 'POST' && payload
+      ? { endpoint, method, payload }
+      : { endpoint, method };
+
+    const response = await fetch(`${API_BASE}/session/${sessionId}/generic`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appium-URL': appiumUrl,
+        'X-Custom-Headers': JSON.stringify(customHeaders)
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) throw new Error('Request failed');
     return response.json();
   }
 };

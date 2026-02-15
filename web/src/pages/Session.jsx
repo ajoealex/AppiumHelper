@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import CaptureViewer from '../components/CaptureViewer';
 
@@ -15,6 +15,25 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [success, setSuccess] = useState('');
   const [currentScreenshot, setCurrentScreenshot] = useState(null);
   const [previewCapture, setPreviewCapture] = useState(null);
+
+  // Execute Script state
+  const [executeScript, setExecuteScript] = useState('mobile: deviceScreenInfo');
+  const [executeScriptResult, setExecuteScriptResult] = useState('');
+  const [executeScriptStatus, setExecuteScriptStatus] = useState(null);
+  const [executingScript, setExecutingScript] = useState(false);
+
+  // Generic API state
+  const [genericEndpoint, setGenericEndpoint] = useState('');
+  const [genericMethod, setGenericMethod] = useState('GET');
+  const [genericPayload, setGenericPayload] = useState('');
+  const [genericResult, setGenericResult] = useState('');
+  const [genericStatus, setGenericStatus] = useState(null);
+  const [sendingGeneric, setSendingGeneric] = useState(false);
+
+  // Logs state
+  const [logs, setLogs] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [expandedLogIndex, setExpandedLogIndex] = useState(null);
 
   const loadContexts = useCallback(async () => {
     try {
@@ -38,10 +57,30 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   }, []);
 
+  const loadLogs = useCallback(async () => {
+    setLogsLoading(true);
+    try {
+      const data = await api.getLogs(10);
+      setLogs(data);
+    } catch (err) {
+      console.error('Failed to load logs:', err);
+    } finally {
+      setLogsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadContexts(), loadCaptures()]).finally(() => setLoading(false));
-  }, [loadContexts, loadCaptures]);
+    Promise.all([loadContexts(), loadCaptures(), loadLogs()]).finally(() => setLoading(false));
+  }, [loadContexts, loadCaptures, loadLogs]);
+
+  // Auto-refresh logs every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadLogs();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [loadLogs]);
 
   // Auto-dismiss messages after 5 seconds
   useEffect(() => {
@@ -65,6 +104,17 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       await loadContexts();
     } finally {
       setRefreshingContexts(false);
+    }
+  };
+
+  const handleContextChange = async (contextName) => {
+    setSelectedContext(contextName);
+    setError('');
+    try {
+      await api.setContext(appiumUrl, sessionId, contextName, customHeaders);
+      setSuccess(`Context set to: ${contextName}`);
+    } catch (err) {
+      setError('Failed to set context: ' + err.message);
     }
   };
 
@@ -154,6 +204,70 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   };
 
+  const handleExecuteScript = async () => {
+    if (!executeScript.trim()) return;
+
+    setExecutingScript(true);
+    setExecuteScriptResult('');
+    setExecuteScriptStatus(null);
+
+    try {
+      const result = await api.executeScript(appiumUrl, sessionId, executeScript, [], customHeaders);
+      setExecuteScriptResult(JSON.stringify(result, null, 2));
+      setExecuteScriptStatus(200);
+    } catch (err) {
+      setExecuteScriptResult(`Error: ${err.message}`);
+      setExecuteScriptStatus('Error');
+    } finally {
+      setExecutingScript(false);
+    }
+  };
+
+  const handleGenericRequest = async () => {
+    if (!genericEndpoint.trim()) return;
+
+    setSendingGeneric(true);
+    setGenericResult('');
+    setGenericStatus(null);
+
+    try {
+      // Prepend /session/{session id}/ to the endpoint
+      const fullEndpoint = `/session/{session id}/${genericEndpoint.replace(/^\//, '')}`;
+      const result = await api.genericRequest(
+        appiumUrl,
+        sessionId,
+        fullEndpoint,
+        genericMethod,
+        genericMethod === 'POST' ? genericPayload : null,
+        customHeaders
+      );
+      setGenericResult(JSON.stringify(result, null, 2));
+      setGenericStatus(200);
+    } catch (err) {
+      setGenericResult(`Error: ${err.message}`);
+      setGenericStatus('Error');
+    } finally {
+      setSendingGeneric(false);
+    }
+  };
+
+  const handleClearLogs = () => {
+    setLogs([]);
+  };
+
+  const handleDeleteAllLogs = async () => {
+    if (logs.length === 0) return;
+    if (confirm('Are you sure you want to delete all log files from the server?')) {
+      try {
+        await api.deleteLogs();
+        setLogs([]);
+        setSuccess('All logs deleted successfully');
+      } catch (err) {
+        setError('Failed to delete logs: ' + err.message);
+      }
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -203,7 +317,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
               <div className="flex gap-2">
                 <select
                   value={selectedContext}
-                  onChange={(e) => setSelectedContext(e.target.value)}
+                  onChange={(e) => handleContextChange(e.target.value)}
                   className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   {contexts.length === 0 ? (
@@ -371,6 +485,269 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                 </div>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Advanced Sections */}
+        <div id="advanced-sections" className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          {/* Execute Script Section */}
+          <div id="execute-script-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
+            <h2 className="text-lg font-semibold text-white mb-4">Execute Script</h2>
+            <p className="text-gray-400 text-xs mb-3">POST /session/{'{session id}'}/execute/sync</p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-gray-300 text-sm font-medium mb-2">
+                  Script
+                </label>
+                <textarea
+                  value={executeScript}
+                  onChange={(e) => setExecuteScript(e.target.value)}
+                  placeholder="mobile: deviceScreenInfo"
+                  rows={4}
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm resize-none"
+                />
+              </div>
+
+              <button
+                onClick={handleExecuteScript}
+                disabled={executingScript || !executeScript.trim()}
+                className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
+              >
+                {executingScript ? 'Executing...' : 'Send'}
+              </button>
+
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="text-gray-300 text-sm font-medium">
+                    Response
+                  </label>
+                  {executeScriptStatus !== null && (
+                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                      executeScriptStatus === 200 ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                    }`}>
+                      {executeScriptStatus}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  value={executeScriptResult}
+                  readOnly
+                  rows={6}
+                  placeholder="Response will appear here..."
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-gray-300 placeholder-gray-500 font-mono text-sm resize-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Generic API Section */}
+          <div id="generic-api-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
+            <h2 className="text-lg font-semibold text-white mb-4">Generic WebDriver API</h2>
+            <p className="text-gray-400 text-xs mb-3">Send any WebDriver command</p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-gray-300 text-sm font-medium mb-2">
+                  Endpoint
+                </label>
+                <div className="flex">
+                  <span className="inline-flex items-center px-3 py-2 bg-gray-600 border border-r-0 border-gray-600 rounded-l-lg text-gray-400 font-mono text-sm">
+                    /session/{'{session id}'}/
+                  </span>
+                  <input
+                    type="text"
+                    value={genericEndpoint}
+                    onChange={(e) => setGenericEndpoint(e.target.value)}
+                    placeholder="url"
+                    className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-r-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-gray-300 text-sm font-medium mb-2">
+                  Method
+                </label>
+                <select
+                  value={genericMethod}
+                  onChange={(e) => setGenericMethod(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
+              </div>
+
+              {genericMethod === 'POST' && (
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    Payload (JSON)
+                  </label>
+                  <textarea
+                    value={genericPayload}
+                    onChange={(e) => setGenericPayload(e.target.value)}
+                    placeholder='{"key": "value"}'
+                    rows={3}
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm resize-none"
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={handleGenericRequest}
+                disabled={sendingGeneric || !genericEndpoint.trim()}
+                className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
+              >
+                {sendingGeneric ? 'Sending...' : 'Send'}
+              </button>
+
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="text-gray-300 text-sm font-medium">
+                    Response
+                  </label>
+                  {genericStatus !== null && (
+                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                      genericStatus === 200 ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                    }`}>
+                      {genericStatus}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  value={genericResult}
+                  readOnly
+                  rows={6}
+                  placeholder="Response will appear here..."
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-gray-300 placeholder-gray-500 font-mono text-sm resize-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* API Logs Section */}
+        <div id="api-logs-section" className="bg-gray-800 rounded-lg p-6 mt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white">
+              WebDriver API Logs ({logs.length})
+            </h2>
+            <div className="flex gap-2">
+              <button
+                onClick={loadLogs}
+                disabled={logsLoading}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 text-white rounded-lg transition-colors cursor-pointer"
+                title="Refresh logs"
+              >
+                {logsLoading ? 'Loading...' : 'Refresh'}
+              </button>
+              <button
+                onClick={handleClearLogs}
+                disabled={logs.length === 0}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
+                title="Clear logs from view"
+              >
+                Clear
+              </button>
+              <button
+                onClick={handleDeleteAllLogs}
+                disabled={logs.length === 0}
+                className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
+                title="Delete all log files from server"
+              >
+                Delete All
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            {logs.length === 0 ? (
+              <p className="text-gray-400 text-sm">No logs available</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700">
+                    <th className="text-left text-gray-400 font-medium py-2 px-2">Timestamp</th>
+                    <th className="text-left text-gray-400 font-medium py-2 px-2">Method</th>
+                    <th className="text-left text-gray-400 font-medium py-2 px-2">URL</th>
+                    <th className="text-left text-gray-400 font-medium py-2 px-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map((log, index) => {
+                    const hasError = log.error || log.errorResponse;
+                    const isExpanded = expandedLogIndex === index;
+                    return (
+                      <React.Fragment key={index}>
+                        <tr
+                          className={`border-b border-gray-700/50 hover:bg-gray-700/30 ${hasError ? 'cursor-pointer' : ''}`}
+                          onClick={() => hasError && setExpandedLogIndex(isExpanded ? null : index)}
+                        >
+                          <td className="py-2 px-2 text-gray-300 font-mono text-xs whitespace-nowrap">
+                            <div className="flex items-center gap-1">
+                              {hasError && (
+                                <svg className={`w-3 h-3 text-red-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                              )}
+                              {log.timestamp}
+                            </div>
+                          </td>
+                          <td className="py-2 px-2">
+                            <span className={`font-mono text-xs px-2 py-0.5 rounded ${
+                              log.method === 'GET' ? 'bg-green-900/50 text-green-400' :
+                              log.method === 'POST' ? 'bg-blue-900/50 text-blue-400' :
+                              log.method === 'DELETE' ? 'bg-red-900/50 text-red-400' :
+                              'bg-gray-700 text-gray-300'
+                            }`}>
+                              {log.method}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2 text-gray-300 font-mono text-xs max-w-md truncate" title={log.url}>
+                            {log.url}
+                          </td>
+                          <td className="py-2 px-2">
+                            <span className={`font-mono text-xs ${
+                              log.status >= 200 && log.status < 300 ? 'text-green-400' :
+                              log.status >= 400 ? 'text-red-400' :
+                              'text-yellow-400'
+                            }`}>
+                              {log.status}
+                            </span>
+                          </td>
+                        </tr>
+                        {isExpanded && hasError && (
+                          <tr className="bg-red-900/20">
+                            <td colSpan={4} className="py-3 px-4">
+                              <div className="space-y-2">
+                                {log.error && (
+                                  <div>
+                                    <span className="text-red-400 text-xs font-medium">Error: </span>
+                                    <span className="text-gray-300 text-xs font-mono">{log.error}</span>
+                                  </div>
+                                )}
+                                {log.errorResponse && (
+                                  <div>
+                                    <span className="text-red-400 text-xs font-medium">Response: </span>
+                                    <pre className="mt-1 text-gray-300 text-xs font-mono bg-gray-900 p-2 rounded overflow-x-auto max-h-40 overflow-y-auto">
+                                      {typeof log.errorResponse === 'string'
+                                        ? log.errorResponse
+                                        : JSON.stringify(log.errorResponse, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
