@@ -26,9 +26,9 @@ This project uses shared environment variables via dotenv.
 Supported variables:
 
 ```bash
-API_HOST=127.0.0.1
+API_HOST=0.0.0.0
 API_PORT=3001
-WEB_HOST=127.0.0.1
+WEB_HOST=0.0.0.0
 WEB_PORT=5173
 ```
 
@@ -55,6 +55,13 @@ Run Docker from repo root so both services use the same `.env` values:
 
 ```bash
 docker compose --env-file .env -f docker_setup/docker-compose.yml up --build
+```
+
+Restart after env changes:
+
+```bash
+docker compose --env-file .env -f docker_setup/docker-compose.yml down
+docker compose --env-file .env -f docker_setup/docker-compose.yml up --build -d
 ```
 
 Or use npm scripts:
