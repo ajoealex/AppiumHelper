@@ -6,6 +6,7 @@ This setup runs both services:
 - Both containers are attached to the `appium_helper_net` Docker network.
 
 `app_data` is bind-mounted to the host at `../app_data`.
+Containers run with `NO_GLOBAL_CONF=1`, so `global.conf.js` is not used inside Docker.
 
 Web service receives API connection settings via environment variables:
 - `VITE_API_PROTOCOL`
