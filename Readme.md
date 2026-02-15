@@ -77,7 +77,30 @@ npm run docker:remove
 1. Open the web UI at `http://127.0.0.1:5173`.
 2. Enter your Appium server URL, for example `http://127.0.0.1:4723`.
 3. Click "Check Connection", pick a session, and connect.
-4. Capture sources/screenshots and inspect saved captures.
+4. In Capture Controls, refresh/get contexts, choose one, then capture source/screenshots.
+5. Use the Elements section to find, save, and act on elements.
+6. Inspect actions in the WebDriver API logs.
+
+## Session Controls Highlights
+
+- Context handling:
+  - Context list is fetched only (no automatic switching).
+  - `Get Current` fetches current context via WebDriver and updates the selected context.
+  - Capture uses the context selected by the user.
+- Screenshot preview:
+  - `Live` mode supports configurable refetch interval in seconds.
+- Elements section (between captures preview and advanced tools):
+  - Left panel:
+    - Find elements on mobile screen (`POST /session/{sessionId}/elements`)
+    - Find child elements under parent (`POST /session/{sessionId}/element/{elementId}/elements`)
+    - Supports standard WebDriver locators plus mobile-specific Appium locators.
+    - Parent field accepts saved element name or raw element id.
+  - Right panel:
+    - Save elements automatically (single-match find) or manually (name + id).
+    - Per-element actions: Exists, Tap, Click, Rename, Delete.
+    - Coordinate actions: Tap and Click by X/Y.
+- Logs:
+  - Element-related WebDriver actions (find/exists/tap/click and coordinate tap/click) trigger log refresh so calls appear immediately.
 
 ## API Endpoints
 
@@ -89,6 +112,7 @@ npm run docker:remove
 | `/session/:id/screenshot` | GET | Get screenshot (base64) |
 | `/session/:id/element/:eid/screenshot` | GET | Get element screenshot |
 | `/session/:id/capture` | POST | Capture source and screenshot |
+| `/session/:id/generic` | POST | Generic WebDriver API proxy |
 | `/captures` | GET | List all captures |
 | `/captures/:name/screenshot` | GET | Get capture screenshot |
 | `/captures/:name/source` | GET | Get capture source XML |
@@ -292,4 +316,217 @@ Legacy Touch | No | No | No |
 
 ---
 
+
+
+
+# Sending Keys in Mobile Automation (Appium / WebDriver)
+
+This document is a **protocol-level reference** for sending text input (keys) in **mobile automation** using **Appium with WebDriver APIs**.
+
+Scope:
+- Android and iOS native apps
+- WebView and mobile browsers
+- Element-level vs device-level typing
+- W3C-standard and Appium-specific APIs
+
+---
+
+## 1. Send Keys to a Specific Element (Recommended)
+
+### WebDriver API
+```
+POST /session/{sessionId}/element/{elementId}/value
+```
+
+### Canonical W3C Payload
+```json
+{
+  "text": "hello world",
+  "value": ["h","e","l","l","o"," ","w","o","r","l","d"]
+}
+```
+
+### Behavior
+- Sends text directly to the target element
+- Requires the element to be **editable and focused**
+- This is the **most portable and reliable approach**
+
+### Supported On
+- Android native apps
+- iOS native apps
+- WebViews
+- Mobile browsers
+
+### Common Failures
+- Element not editable
+- Element not visible
+- System-owned UI (alerts, permission dialogs)
+
+---
+
+## 2. Send Keys to the Currently Focused Element (Session-Level)
+
+### WebDriver API
+```
+POST /session/{sessionId}/keys
+```
+
+### Payload
+```json
+{
+  "text": "hello"
+}
+```
+
+or
+
+```json
+{
+  "value": ["h","e","l","l","o"]
+}
+```
+
+### Behavior
+- Sends keys to whatever currently has focus
+- No element targeting
+- Keyboard must already be visible
+
+### Platform Notes
+- Android: Works reliably
+- iOS: Focus-sensitive, less reliable
+- WebView: Depends on context
+
+---
+
+## 3. Android Device-Level Typing (Appium Extensions)
+
+These APIs bypass WebDriver typing and interact directly with the Android OS.
+
+### 3.1 `mobile: type`
+
+```
+POST /session/{sessionId}/execute
+```
+
+```json
+{
+  "script": "mobile: type",
+  "args": [
+    { "text": "hello world" }
+  ]
+}
+```
+
+### 3.2 Shell-Based Typing (Most Reliable on Android)
+
+```json
+{
+  "script": "mobile: shell",
+  "args": [
+    {
+      "command": "input",
+      "args": ["text", "hello%sworld"]
+    }
+  ]
+}
+```
+
+Notes:
+- `%s` represents space in Android shell input
+- Extremely reliable
+- Android-only
+
+---
+
+## 4. iOS Device-Level Typing Reality
+
+iOS **does not support true device-level typing**.
+
+What is supported:
+- Element-level typing
+- Focused-element typing
+
+What is not supported:
+- Global key injection
+- OS-level text input
+
+This is an **Apple platform restriction**, not an Appium limitation.
+
+---
+
+## 5. Sending Keys via Actions API (Rare, Not Recommended)
+
+### WebDriver API
+```
+POST /session/{sessionId}/actions
+```
+
+### Example
+```json
+{
+  "actions": [
+    {
+      "type": "key",
+      "id": "keyboard",
+      "actions": [
+        { "type": "keyDown", "value": "a" },
+        { "type": "keyUp", "value": "a" }
+      ]
+    }
+  ]
+}
+```
+
+Notes:
+- Designed primarily for desktop browsers
+- Mobile support is inconsistent
+- Avoid for native apps
+
+---
+
+## 6. Capability Recommendations
+
+### Android
+- `unicodeKeyboard: true`
+- `resetKeyboard: true`
+
+### iOS
+- Ensure element has focus
+- Keyboard must be visible
+- Secure fields may restrict behavior
+
+---
+
+## 7. Compatibility Matrix
+
+| Method | Android | iOS | Reliability |
+|-----|--------|-----|-------------|
+| Element `/value` | Yes | Yes | High |
+| Session `/keys` | Yes | Partial | Medium |
+| `mobile: type` | Yes | No | High |
+| Shell `input text` | Yes | No | Very High |
+| Actions keys | Partial | Partial | Low |
+
+---
+
+## 8. Strategic Guidance
+
+- Prefer **element-level typing**
+- Use session-level keys only when focus is guaranteed
+- Use Android device-level typing as a fallback
+- Do not expect global typing support on iOS
+- Always validate element editability before typing
+
+---
+
+## Final Takeaway
+
+There are **three typing layers** in mobile automation:
+1. Element-level (portable, recommended)
+2. Session-level (focus-based)
+3. Device-level (Android-only)
+
+Choose the API based on **platform, focus, and ownership** of the UI element.
+
+This approach ensures **stability, portability, and cloud compatibility**.
 

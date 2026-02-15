@@ -143,7 +143,10 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
       } catch {
         // Ignore if we can't read the body
       }
-      throw new Error(`Appium request failed: ${error}`);
+      const requestError = new Error(`Appium request failed: ${error}`);
+      requestError.statusCode = response.status;
+      requestError.appiumResponse = errorResponse;
+      throw requestError;
     }
 
     return response.json();
@@ -164,6 +167,21 @@ async function appiumRequest(appiumUrl, endpoint, method = 'GET', body = null, c
   }
 }
 
+function sendProxyError(res, error) {
+  const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+  if (error?.appiumResponse !== undefined) {
+    if (typeof error.appiumResponse === 'object' && error.appiumResponse !== null) {
+      return res.status(statusCode).json(error.appiumResponse);
+    }
+    return res.status(statusCode).json({
+      error: error.message,
+      value: error.appiumResponse
+    });
+  }
+
+  return res.status(500).json({ error: error.message });
+}
+
 // GET /sessions - List sessions from Appium
 app.get('/sessions', async (req, res) => {
   try {
@@ -172,7 +190,7 @@ app.get('/sessions', async (req, res) => {
     const data = await appiumRequest(appiumUrl, '/sessions', 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -185,7 +203,7 @@ app.get('/session/:id/source', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/source`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -197,7 +215,7 @@ app.get('/session/:id/contexts', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/contexts`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -210,7 +228,7 @@ app.post('/session/:id/context', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/context`, 'POST', { name }, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -222,7 +240,7 @@ app.get('/session/:id/screenshot', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/screenshot`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -234,7 +252,7 @@ app.get('/session/:id/element/:eid/screenshot', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/element/${req.params.eid}/screenshot`, 'GET', null, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -247,7 +265,7 @@ app.post('/session/:id/execute', async (req, res) => {
     const data = await appiumRequest(appiumUrl, `/session/${req.params.id}/execute/sync`, 'POST', { script, args }, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
@@ -278,7 +296,7 @@ app.post('/session/:id/generic', async (req, res) => {
     const data = await appiumRequest(appiumUrl, fullEndpoint, method, body, customHeaders);
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendProxyError(res, error);
   }
 });
 
