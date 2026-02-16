@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Home from './pages/Home';
 import Session from './pages/Session';
+import Captures from './pages/Captures';
 
 const CONNECTION_KEY = 'appium_helper_connection';
 
@@ -13,6 +14,7 @@ function App() {
       return null;
     }
   });
+  const [activePage, setActivePage] = useState('home');
 
   const handleConnect = (appiumUrl, sessionId, customHeaders = {}) => {
     const conn = { appiumUrl, sessionId, customHeaders };
@@ -23,6 +25,14 @@ function App() {
   const handleDisconnect = () => {
     localStorage.removeItem(CONNECTION_KEY);
     setConnection(null);
+  };
+
+  const handleOpenCaptures = () => {
+    setActivePage('captures');
+  };
+
+  const handleBackToHome = () => {
+    setActivePage('home');
   };
 
   if (connection) {
@@ -36,7 +46,11 @@ function App() {
     );
   }
 
-  return <Home onConnect={handleConnect} />;
+  if (activePage === 'captures') {
+    return <Captures onBack={handleBackToHome} />;
+  }
+
+  return <Home onConnect={handleConnect} onOpenCaptures={handleOpenCaptures} />;
 }
 
 export default App;
