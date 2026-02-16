@@ -97,8 +97,19 @@ npm run docker:remove
     - Parent field accepts saved element name or raw element id.
   - Right panel:
     - Save elements automatically (single-match find) or manually (name + id).
-    - Per-element actions: Exists, Tap, Click, Rename, Delete.
+    - Per-element actions are shown on tile hover in a 2-row layout:
+      - Row 1: Exists, Rect, Rename, Delete
+      - Row 2: Tap, Tap @Loc, Click, Keys
+    - `Keys` opens a popup with payload mode dropdown:
+      - `W3C-preferred (use this by default)` -> `{ "text": "..." }`
+      - `Legacy-compatible (use only when you need control)` -> `{ "value": ["..."] }`
     - Coordinate actions: Tap and Click by X/Y.
+    - `Send Keys To Focused Element` button (below coordinate actions) opens a popup with the same payload mode dropdown and sends focused keys (`POST /session/{sessionId}/keys` on Appium).
+- Advanced sections:
+  - Execute Script:
+    - Executed request history (last 10), expandable tiles, JSON export.
+  - Generic WebDriver API:
+    - Executed API history (last 10), expandable tiles, JSON export.
 - Logs:
   - Element-related WebDriver actions (find/exists/tap/click and coordinate tap/click) trigger log refresh so calls appear immediately.
 
@@ -119,6 +130,12 @@ npm run docker:remove
 | `/captures/:name/rename` | POST | Rename a capture folder |
 
 All endpoints that proxy to Appium require the `X-Appium-URL` header.
+
+Notes:
+- The frontend sends WebDriver/Appium calls through `/session/:id/generic`.
+- Examples:
+  - Element keys: `POST /session/{sessionId}/element/{elementId}/value`
+  - Focused keys: `POST /session/{sessionId}/keys`
 
 ## Captures
 
@@ -338,10 +355,16 @@ Scope:
 POST /session/{sessionId}/element/{elementId}/value
 ```
 
-### Canonical W3C Payload
+### W3C-Preferred Payload (Default)
 ```json
 {
-  "text": "hello world",
+  "text": "hello world"
+}
+```
+
+### Legacy-Compatible Payload (Optional)
+```json
+{
   "value": ["h","e","l","l","o"," ","w","o","r","l","d"]
 }
 ```
@@ -385,6 +408,10 @@ or
   "value": ["h","e","l","l","o"]
 }
 ```
+
+In the UI popup, payload mode options are:
+- `W3C-preferred (use this by default)` -> sends `text`
+- `Legacy-compatible (use only when you need control)` -> sends `value`
 
 ### Behavior
 - Sends keys to whatever currently has focus
