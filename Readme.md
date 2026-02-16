@@ -1,6 +1,10 @@
 ﻿# Appium Helper
 
 Web UI + API wrapper for interacting with Appium sessions, capturing source and screenshots.
+<img width="1611" height="916" alt="1" src="https://github.com/user-attachments/assets/a5dbf54b-f85e-4d4b-987a-295535e5207a" />
+<img width="1855" height="2880" alt="app home" src="https://github.com/user-attachments/assets/2d9874c3-b217-4ce4-b29b-1a4ef15e3bf1" />
+
+
 
 ## Project Structure
 
@@ -556,4 +560,5 @@ There are **three typing layers** in mobile automation:
 Choose the API based on **platform, focus, and ownership** of the UI element.
 
 This approach ensures **stability, portability, and cloud compatibility**.
+
 
