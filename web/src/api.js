@@ -142,7 +142,7 @@ export const api = {
   },
 
   getViewerUrl(captureName) {
-    return `${API_BASE}/view/${captureName}/viewer.html`;
+    return `${API_BASE}/view/${encodeURIComponent(captureName)}/viewer.html`;
   },
 
   async renameCapture(oldName, newName) {

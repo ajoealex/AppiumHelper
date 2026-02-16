@@ -558,6 +558,18 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   };
 
+  const handleRenameCaptureTile = async (captureName) => {
+    const newName = window.prompt('Enter a new capture name:', captureName)?.trim();
+    if (!newName || newName === captureName) return;
+    await handleRename(captureName, newName);
+    setSuccess('Capture renamed successfully');
+  };
+
+  const handleDeleteCaptureTile = async (captureName) => {
+    if (!confirm(`Are you sure you want to delete capture "${captureName}"?`)) return;
+    await handleDelete(captureName);
+  };
+
   const handleDeleteAll = async () => {
     if (captures.length === 0) return;
     if (confirm(`Are you sure you want to delete all ${captures.length} captures?`)) {
@@ -1361,7 +1373,27 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                         className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shrink-0 cursor-pointer"
                         title="Open in viewer"
                       >
-                        Open
+                        <span className="inline-flex items-center gap-1">
+                          Open
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3h7m0 0v7m0-7L10 14" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12v7a2 2 0 002 2h7" />
+                          </svg>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => handleRenameCaptureTile(capture.name)}
+                        className="px-3 py-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        title="Rename capture"
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCaptureTile(capture.name)}
+                        className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        title="Delete capture"
+                      >
+                        Delete
                       </button>
                     </div>
                   </div>
