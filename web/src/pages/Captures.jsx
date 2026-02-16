@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 
+function formatCaptureDateTime(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
+}
+
+function normalizeCaptureName(value) {
+  return (value || '').trim().toLowerCase();
+}
+
 export default function Captures({ onBack }) {
   const [captures, setCaptures] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,8 +61,19 @@ export default function Captures({ onBack }) {
   const handleRename = async (captureName) => {
     const currentName = captureName || '';
     const nextName = window.prompt('Enter a new capture name:', currentName)?.trim();
+    const normalizedCurrentName = normalizeCaptureName(currentName);
+    const normalizedNextName = normalizeCaptureName(nextName);
 
-    if (!nextName || nextName === currentName) {
+    if (!nextName || normalizedNextName === normalizedCurrentName) {
+      return;
+    }
+
+    const hasDuplicate = captures.some((capture) => (
+      normalizeCaptureName(capture?.name) === normalizedNextName
+      && normalizeCaptureName(capture?.name) !== normalizedCurrentName
+    ));
+    if (hasDuplicate) {
+      setError('A capture with this name already exists');
       return;
     }
 
@@ -125,6 +146,7 @@ export default function Captures({ onBack }) {
           <div className="grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-3 gap-4">
             {captures.map((capture) => {
               const showImage = capture.metadata?.hasScreenshot !== false && !imageErrors[capture.name];
+              const capturedAt = capture.metadata?.capturedAt || capture.createdAt;
               return (
                 <article
                   key={capture.name}
@@ -150,7 +172,24 @@ export default function Captures({ onBack }) {
                   </div>
 
                   <div className="p-4">
-                    <h2 className="text-sm font-semibold text-white break-all mb-3">{capture.name}</h2>
+                    <div className="rounded-lg border border-gray-700/80 bg-gray-900/50 px-3 py-2 mb-3 space-y-1">
+                      <p className="text-xs text-gray-300 break-all">
+                        <span className="text-gray-500">Name:</span>{' '}
+                        <span className="text-white">{capture.name}</span>
+                      </p>
+                      <p className="text-xs text-gray-300 break-all">
+                        <span className="text-gray-500">Context:</span>{' '}
+                        <span className="text-white">{capture.metadata?.contextName || 'N/A'}</span>
+                      </p>
+                      <p className="text-xs text-gray-300 break-all">
+                        <span className="text-gray-500">Session ID:</span>{' '}
+                        <span className="font-mono text-white">{capture.metadata?.sessionId || 'N/A'}</span>
+                      </p>
+                      <p className="text-xs text-gray-300 break-all">
+                        <span className="text-gray-500">Date/Time:</span>{' '}
+                        <span className="text-white">{formatCaptureDateTime(capturedAt)}</span>
+                      </p>
+                    </div>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"

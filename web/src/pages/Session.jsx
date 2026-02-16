@@ -129,6 +129,16 @@ function formatErrorForTextarea(err) {
   return `Error: ${err?.message || 'Unknown error'}`;
 }
 
+function formatCaptureDateTime(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
+}
+
+function normalizeCaptureName(value) {
+  return (value || '').trim().toLowerCase();
+}
+
 export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDisconnect }) {
   const [contexts, setContexts] = useState([]);
   const [selectedContext, setSelectedContext] = useState('');
@@ -538,12 +548,30 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   };
 
   const handleRename = async (oldName, newName) => {
+    const normalizedOldName = normalizeCaptureName(oldName);
+    const normalizedNewName = normalizeCaptureName(newName);
+
+    if (!normalizedNewName || normalizedNewName === normalizedOldName) {
+      return false;
+    }
+
+    const hasDuplicate = captures.some((capture) => (
+      normalizeCaptureName(capture?.name) === normalizedNewName
+      && normalizeCaptureName(capture?.name) !== normalizedOldName
+    ));
+    if (hasDuplicate) {
+      setError('A capture with this name already exists');
+      return false;
+    }
+
     try {
-      await api.renameCapture(oldName, newName);
+      await api.renameCapture(oldName, newName.trim());
       await loadCaptures();
       setSelectedCapture(null);
+      return true;
     } catch (err) {
       setError('Rename failed: ' + err.message);
+      return false;
     }
   };
 
@@ -561,8 +589,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const handleRenameCaptureTile = async (captureName) => {
     const newName = window.prompt('Enter a new capture name:', captureName)?.trim();
     if (!newName || newName === captureName) return;
-    await handleRename(captureName, newName);
-    setSuccess('Capture renamed successfully');
+    const renamed = await handleRename(captureName, newName);
+    if (renamed) {
+      setSuccess('Capture renamed successfully');
+    }
   };
 
   const handleDeleteCaptureTile = async (captureName) => {
@@ -1333,44 +1363,70 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                 captures.map((capture) => (
                   <div
                     key={capture.name}
-                    className={`w-full p-3 rounded-lg transition-colors ${
+                    className={`group w-full p-3 rounded-xl border transition-all ${
                       capture.metadata?.hasErrors
-                        ? 'bg-red-900/30 border border-red-700/50'
-                        : 'bg-gray-700'
+                        ? 'bg-gradient-to-b from-red-900/25 to-gray-800/90 border-red-700/60'
+                        : 'bg-gradient-to-b from-gray-700/90 to-gray-800/90 border-gray-600/70'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => setSelectedCapture(capture)}
-                        className="flex-1 text-left hover:opacity-80 transition-opacity cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          {capture.metadata?.hasErrors && (
-                            <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    <button
+                      onClick={() => setSelectedCapture(capture)}
+                      className="w-full text-left cursor-pointer mb-3"
+                      title="Open capture details"
+                    >
+                      <div className="rounded-lg border border-gray-600/70 bg-gray-900/50 px-3 py-2.5 group-hover:border-gray-500/80 transition-colors">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="min-w-0">
+                            <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Capture</p>
+                            <p className="text-sm font-semibold text-white break-all">{capture.name}</p>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-1.5">
+                            {capture.metadata?.hasErrors ? (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-red-700/70 bg-red-900/50 text-[10px] font-medium text-red-200">
+                                Error
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-700/70 bg-emerald-900/40 text-[10px] font-medium text-emerald-200">
+                                OK
+                              </span>
+                            )}
+                            <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                          )}
-                          <span className="text-white font-medium truncate">
-                            {capture.name}
-                          </span>
+                          </div>
                         </div>
-                        <div className="text-gray-400 text-xs mt-1">
-                          {new Date(capture.createdAt).toLocaleString()}
-                          {capture.metadata?.hasErrors && (
-                            <span className="text-red-400 ml-2">- Has errors</span>
-                          )}
+
+                        <div className="space-y-1.5">
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Context:</span>
+                            <span className="text-gray-100">{capture.metadata?.contextName || 'N/A'}</span>
+                          </p>
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Session ID:</span>
+                            <span className="font-mono text-gray-100">{capture.metadata?.sessionId || 'N/A'}</span>
+                          </p>
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Date/Time:</span>
+                            <span className="text-gray-100">{formatCaptureDateTime(capture.metadata?.capturedAt || capture.createdAt)}</span>
+                          </p>
                         </div>
-                      </button>
+                        {capture.metadata?.hasErrors && (
+                          <p className="text-[11px] text-red-300 mt-2">Capture has errors. Open details for diagnostics.</p>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                       <button
                         onClick={() => handlePreview(capture)}
-                        className="px-3 py-1 text-xs bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 text-white rounded-md transition-colors cursor-pointer"
                         title="Preview screenshot"
                       >
                         Preview
                       </button>
                       <button
                         onClick={() => window.open(api.getViewerUrl(capture.name), '_blank')}
-                        className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white rounded-md transition-colors cursor-pointer"
                         title="Open in viewer"
                       >
                         <span className="inline-flex items-center gap-1">
@@ -1383,14 +1439,14 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                       </button>
                       <button
                         onClick={() => handleRenameCaptureTile(capture.name)}
-                        className="px-3 py-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-amber-600 hover:bg-amber-500 border border-amber-500 text-white rounded-md transition-colors cursor-pointer"
                         title="Rename capture"
                       >
                         Rename
                       </button>
                       <button
                         onClick={() => handleDeleteCaptureTile(capture.name)}
-                        className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 border border-red-500 text-white rounded-md transition-colors cursor-pointer"
                         title="Delete capture"
                       >
                         Delete
