@@ -283,6 +283,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [manualElementId, setManualElementId] = useState('');
   const [coordX, setCoordX] = useState('');
   const [coordY, setCoordY] = useState('');
+  const [swipeX1, setSwipeX1] = useState('');
+  const [swipeY1, setSwipeY1] = useState('');
+  const [swipeX2, setSwipeX2] = useState('');
+  const [swipeY2, setSwipeY2] = useState('');
   const [runningElementAction, setRunningElementAction] = useState('');
   const [expandedSavedElementId, setExpandedSavedElementId] = useState(null);
   const [showElementPropertyModal, setShowElementPropertyModal] = useState(false);
@@ -1892,6 +1896,35 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     return { x: Math.round(x), y: Math.round(y) };
   };
 
+  const parseSwipeCoordinatePair = () => {
+    const x1 = Number(swipeX1);
+    const y1 = Number(swipeY1);
+    const x2 = Number(swipeX2);
+    const y2 = Number(swipeY2);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) {
+      throw new Error('Enter valid numeric X1, Y1, X2, and Y2 coordinates');
+    }
+    return {
+      x1: Math.round(x1),
+      y1: Math.round(y1),
+      x2: Math.round(x2),
+      y2: Math.round(y2)
+    };
+  };
+
+  const handleSwapSwipeCoordinates = () => {
+    setSwipeX1((prevX1) => {
+      const nextX1 = swipeX2;
+      setSwipeX2(prevX1);
+      return nextX1;
+    });
+    setSwipeY1((prevY1) => {
+      const nextY1 = swipeY2;
+      setSwipeY2(prevY1);
+      return nextY1;
+    });
+  };
+
   const handleTapCoordinates = async () => {
     const actionKey = 'coord:tap';
     setRunningElementAction(actionKey);
@@ -1918,6 +1951,22 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       setSuccess(`Clicked coordinates (${x}, ${y})`);
     } catch (err) {
       setError('Coordinate click failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleSwipeByCoordinates = async () => {
+    const actionKey = 'coord:swipe';
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      const { x1, y1, x2, y2 } = parseSwipeCoordinatePair();
+      await api.swipeByCoordinates(appiumUrl, sessionId, x1, y1, x2, y2, customHeaders);
+      setSuccess(`Swiped coordinates (${x1}, ${y1}) -> (${x2}, ${y2})`);
+    } catch (err) {
+      setError('Coordinate swipe failed: ' + err.message);
     } finally {
       setRunningElementAction('');
       await refreshLogsAfterWebDriverAction();
@@ -2403,6 +2452,107 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             </p>
 
             <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
+              <p className="text-xs text-gray-400 mb-2">Coordinate actions</p>
+              <div className="space-y-3">
+                <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
+                  <p className="text-[11px] text-gray-400 mb-2">oordinate action</p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <input
+                      type="number"
+                      value={coordX}
+                      onChange={(e) => setCoordX(e.target.value)}
+                      placeholder="X"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <input
+                      type="number"
+                      value={coordY}
+                      onChange={(e) => setCoordY(e.target.value)}
+                      placeholder="Y"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <button
+                      onClick={handleTapCoordinates}
+                      disabled={runningElementAction === 'coord:tap'}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                    >
+                      Tap
+                    </button>
+                    <button
+                      onClick={handleClickCoordinates}
+                      disabled={runningElementAction === 'coord:click'}
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                    >
+                      Click
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
+                  <p className="text-[11px] text-gray-400 mb-2">Swipe by coordinate</p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <input
+                      type="number"
+                      value={swipeX1}
+                      onChange={(e) => setSwipeX1(e.target.value)}
+                      placeholder="X1"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <input
+                      type="number"
+                      value={swipeY1}
+                      onChange={(e) => setSwipeY1(e.target.value)}
+                      placeholder="Y1"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <button
+                      onClick={handleSwapSwipeCoordinates}
+                      className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] transition-colors cursor-pointer"
+                      title="Swap X1,Y1 with X2,Y2"
+                      aria-label="Swap X1,Y1 with X2,Y2"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-3-3m3 3l-3 3M16 17H4m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                    </button>
+                    <input
+                      type="number"
+                      value={swipeX2}
+                      onChange={(e) => setSwipeX2(e.target.value)}
+                      placeholder="X2"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <input
+                      type="number"
+                      value={swipeY2}
+                      onChange={(e) => setSwipeY2(e.target.value)}
+                      placeholder="Y2"
+                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <button
+                      onClick={handleSwipeByCoordinates}
+                      disabled={runningElementAction === 'coord:swipe'}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                    >
+                      {runningElementAction === 'coord:swipe' ? 'Swiping...' : 'Swipe'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={handleOpenFocusedKeysModal}
+                disabled={sendingFocusedKeys || runningElementAction === 'focused:keys'}
+                className="mt-2 px-3 py-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
+                </svg>
+                Send Keys To Focused Element
+              </button>
+            </div>
+
+            <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
               <p className="text-xs text-gray-400 mb-2">Add element manually</p>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -2427,51 +2577,6 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   Save
                 </button>
               </div>
-            </div>
-
-            <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
-              <p className="text-xs text-gray-400 mb-2">Coordinate actions</p>
-              <div className="flex flex-wrap gap-2 items-center">
-                <input
-                  type="number"
-                  value={coordX}
-                  onChange={(e) => setCoordX(e.target.value)}
-                  placeholder="X"
-                  className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                />
-                <input
-                  type="number"
-                  value={coordY}
-                  onChange={(e) => setCoordY(e.target.value)}
-                  placeholder="Y"
-                  className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                />
-                <button
-                  onClick={handleTapCoordinates}
-                  disabled={runningElementAction === 'coord:tap'}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
-                >
-                  Tap
-                </button>
-                <button
-                  onClick={handleClickCoordinates}
-                  disabled={runningElementAction === 'coord:click'}
-                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
-                >
-                  Click
-                </button>
-              </div>
-              <button
-                onClick={handleOpenFocusedKeysModal}
-                disabled={sendingFocusedKeys || runningElementAction === 'focused:keys'}
-                className="mt-2 px-3 py-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
-                </svg>
-                Send Keys To Focused Element
-              </button>
             </div>
 
             {pendingElementId && (

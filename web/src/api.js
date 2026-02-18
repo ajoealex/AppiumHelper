@@ -43,6 +43,25 @@ function buildTapActions({ x = 0, y = 0, origin = 'viewport' } = {}) {
   };
 }
 
+function buildSwipeActions({ x1 = 0, y1 = 0, x2 = 0, y2 = 0, duration = 300 } = {}) {
+  return {
+    actions: [
+      {
+        type: 'pointer',
+        id: 'finger1',
+        parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, origin: 'viewport', x: x1, y: y1 },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 50 },
+          { type: 'pointerMove', duration, origin: 'viewport', x: x2, y: y2 },
+          { type: 'pointerUp', button: 0 }
+        ]
+      }
+    ]
+  };
+}
+
 export const api = {
   async getSessions(appiumUrl, customHeaders = {}) {
     const response = await fetch(`${API_BASE}/sessions`, {
@@ -393,6 +412,17 @@ export const api = {
           }
         ]
       },
+      customHeaders
+    );
+  },
+
+  async swipeByCoordinates(appiumUrl, sessionId, x1, y1, x2, y2, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      '/session/{session id}/actions',
+      'POST',
+      buildSwipeActions({ x1, y1, x2, y2 }),
       customHeaders
     );
   }
