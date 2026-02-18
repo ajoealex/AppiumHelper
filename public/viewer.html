@@ -486,6 +486,25 @@
                     background: #e5e7eb;
                     margin: 0 4px;
                 }
+                .coords-container {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 10px;
+                    background: #f3f4f6;
+                    border-radius: 8px;
+                }
+                .coords-label {
+                    font-size: 12px;
+                    color: #6b7280;
+                    font-weight: 600;
+                }
+                .coords-value {
+                    font-size: 12px;
+                    color: #111827;
+                    font-weight: 700;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+                }
             `;
             shadow.appendChild(style);
 
@@ -499,6 +518,11 @@
                     <div class="toggle active" id="highlightToggle">
                         <div class="toggle-knob"></div>
                     </div>
+                </div>
+                <div class="divider"></div>
+                <div class="coords-container">
+                    <span class="coords-label">Click</span>
+                    <span class="coords-value" id="clickCoords">x: -, y: -</span>
                 </div>
                 <div class="divider"></div>
                 <button class="export-btn" id="exportBtn">
@@ -524,6 +548,20 @@
             const exportBtn = shadow.getElementById('exportBtn');
             exportBtn.addEventListener('click', () => {
                 exportAppiumHtml();
+            });
+
+            // Click coordinate tracker (adjusted to original coordinates when zoomed).
+            const coordsEl = shadow.getElementById('clickCoords');
+            document.addEventListener('click', (event) => {
+                const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+                if (eventPath.includes(toolbarHost)) return;
+
+                const appiumRoot = document.getElementById('appium_root');
+                const scaleRaw = parseFloat(appiumRoot?.style.zoom || '1');
+                const scale = Number.isFinite(scaleRaw) && scaleRaw > 0 ? scaleRaw : 1;
+                const x = Math.round(event.clientX / scale);
+                const y = Math.round(event.clientY / scale);
+                coordsEl.textContent = `x: ${x}, y: ${y}`;
             });
         }
 

@@ -23,6 +23,81 @@ const EXECUTE_SCRIPT_PAYLOAD_EXAMPLE = `{
   "script": "mobile: alert",
   "args": [{ "action": "getButtons" }]
 }`;
+const REQUEST_HISTORY_LIMIT = 10;
+
+function isSuccessStatusCode(statusCode) {
+  return Number.isInteger(statusCode) && statusCode >= 200 && statusCode < 300;
+}
+
+function normalizeExecutedScriptStatusCode(statusCode) {
+  if (Number.isInteger(statusCode)) return statusCode;
+  return statusCode === 'Error' ? 'Error' : null;
+}
+
+function normalizeExecutedScriptHistoryItem(item) {
+  if (!item || typeof item !== 'object') return null;
+
+  const endpoint = typeof item.endpoint === 'string' ? item.endpoint.trim() : '';
+  const executedAt = typeof item.executedAt === 'string' ? item.executedAt.trim() : '';
+  if (!endpoint || !executedAt) return null;
+
+  const methodRaw = typeof item.method === 'string' ? item.method.trim().toUpperCase() : '';
+  const method = methodRaw || 'POST';
+  const payloadText = typeof item.payloadText === 'string'
+    ? item.payloadText
+    : typeof item.requestText === 'string'
+      ? item.requestText
+      : typeof item.script === 'string'
+        ? item.script
+        : '';
+  const responseText = typeof item.responseText === 'string' ? item.responseText : '';
+
+  return {
+    id: typeof item.id === 'string' && item.id.trim()
+      ? item.id
+      : `${executedAt}-${Math.random().toString(36).slice(2, 8)}`,
+    method,
+    endpoint,
+    statusCode: normalizeExecutedScriptStatusCode(item.statusCode),
+    payloadText,
+    responseText,
+    executedAt
+  };
+}
+
+function normalizeExecutedGenericApiStatusCode(statusCode) {
+  if (Number.isInteger(statusCode)) return statusCode;
+  return statusCode === 'Error' ? 'Error' : null;
+}
+
+function normalizeExecutedGenericApiHistoryItem(item) {
+  if (!item || typeof item !== 'object') return null;
+
+  const endpoint = typeof item.endpoint === 'string' ? item.endpoint.trim() : '';
+  const executedAt = typeof item.executedAt === 'string' ? item.executedAt.trim() : '';
+  if (!endpoint || !executedAt) return null;
+
+  const methodRaw = typeof item.method === 'string' ? item.method.trim().toUpperCase() : '';
+  const method = methodRaw || 'GET';
+  const payloadText = typeof item.payloadText === 'string'
+    ? item.payloadText
+    : typeof item.requestText === 'string'
+      ? item.requestText
+      : '';
+  const responseText = typeof item.responseText === 'string' ? item.responseText : '';
+
+  return {
+    id: typeof item.id === 'string' && item.id.trim()
+      ? item.id
+      : `${executedAt}-${Math.random().toString(36).slice(2, 8)}`,
+    method,
+    endpoint,
+    statusCode: normalizeExecutedGenericApiStatusCode(item.statusCode),
+    payloadText,
+    responseText,
+    executedAt
+  };
+}
 
 function getElementId(elementRef) {
   if (!elementRef || typeof elementRef !== 'object') return '';
@@ -52,6 +127,16 @@ function formatErrorForTextarea(err) {
     return JSON.stringify(err.responsePayload, null, 2);
   }
   return `Error: ${err?.message || 'Unknown error'}`;
+}
+
+function formatCaptureDateTime(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
+}
+
+function normalizeCaptureName(value) {
+  return (value || '').trim().toLowerCase();
 }
 
 export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDisconnect }) {
@@ -90,6 +175,15 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [coordX, setCoordX] = useState('');
   const [coordY, setCoordY] = useState('');
   const [runningElementAction, setRunningElementAction] = useState('');
+  const [showElementKeysModal, setShowElementKeysModal] = useState(false);
+  const [elementKeysTarget, setElementKeysTarget] = useState(null);
+  const [elementKeysText, setElementKeysText] = useState('');
+  const [elementKeysPayloadMode, setElementKeysPayloadMode] = useState('w3c');
+  const [sendingElementKeys, setSendingElementKeys] = useState(false);
+  const [showFocusedKeysModal, setShowFocusedKeysModal] = useState(false);
+  const [focusedKeysText, setFocusedKeysText] = useState('');
+  const [focusedKeysPayloadMode, setFocusedKeysPayloadMode] = useState('w3c');
+  const [sendingFocusedKeys, setSendingFocusedKeys] = useState(false);
 
   // Execute Script state
   const [executeScript, setExecuteScript] = useState('mobile: deviceScreenInfo');
@@ -101,6 +195,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [executingScript, setExecutingScript] = useState(false);
   const [executedScripts, setExecutedScripts] = useState([]);
   const [executedScriptsLoaded, setExecutedScriptsLoaded] = useState(false);
+  const [expandedExecutedScriptId, setExpandedExecutedScriptId] = useState(null);
   const [autoRefreshPreferenceLoaded, setAutoRefreshPreferenceLoaded] = useState(false);
 
   // Generic API state
@@ -110,6 +205,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [genericResult, setGenericResult] = useState('');
   const [genericStatus, setGenericStatus] = useState(null);
   const [sendingGeneric, setSendingGeneric] = useState(false);
+  const [executedGenericApis, setExecutedGenericApis] = useState([]);
+  const [executedGenericApisLoaded, setExecutedGenericApisLoaded] = useState(false);
+  const [expandedExecutedGenericId, setExpandedExecutedGenericId] = useState(null);
 
   // Logs state
   const [logs, setLogs] = useState([]);
@@ -117,9 +215,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [expandedLogIndex, setExpandedLogIndex] = useState(null);
 
   const parsedScreenshotRefreshSeconds = Math.max(1, Number(screenshotRefreshSeconds) || 10);
-  const savedElementNames = savedElements.map((el) => el.name);
   const savedElementsStorageKey = `appium-helper:saved-elements:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const executedScriptsStorageKey = `appium-helper:executed-scripts:${encodeURIComponent(appiumUrl)}:${sessionId}`;
+  const executedGenericApisStorageKey = `appium-helper:executed-generic-apis:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const screenshotLiveStorageKey = `appium-helper:screenshot-live:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const canSendExecuteScript = executeScriptMode === 'scriptOnly'
     ? Boolean(executeScript.trim())
@@ -220,6 +318,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   // Restore executed script history for this Appium URL + session.
   useEffect(() => {
     setExecutedScriptsLoaded(false);
+    setExpandedExecutedScriptId(null);
     try {
       const raw = localStorage.getItem(executedScriptsStorageKey);
       if (!raw) {
@@ -227,18 +326,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       } else {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          const valid = parsed.filter(
-            (item) =>
-              item &&
-              typeof item.id === 'string' &&
-              item.id.trim() &&
-              typeof item.endpoint === 'string' &&
-              item.endpoint.trim() &&
-              typeof item.executedAt === 'string' &&
-              item.executedAt.trim() &&
-              (typeof item.requestText === 'string' || typeof item.script === 'string')
-          );
-          setExecutedScripts(valid.slice(0, 20));
+          const valid = parsed
+            .map((item) => normalizeExecutedScriptHistoryItem(item))
+            .filter(Boolean);
+          setExecutedScripts(valid.slice(0, REQUEST_HISTORY_LIMIT));
         } else {
           setExecutedScripts([]);
         }
@@ -254,11 +345,53 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   useEffect(() => {
     if (!executedScriptsLoaded) return;
     try {
-      localStorage.setItem(executedScriptsStorageKey, JSON.stringify(executedScripts.slice(0, 20)));
+      localStorage.setItem(
+        executedScriptsStorageKey,
+        JSON.stringify(executedScripts.slice(0, REQUEST_HISTORY_LIMIT))
+      );
     } catch {
       // Ignore storage errors.
     }
   }, [executedScripts, executedScriptsLoaded, executedScriptsStorageKey]);
+
+  // Restore generic API history for this Appium URL + session.
+  useEffect(() => {
+    setExecutedGenericApisLoaded(false);
+    setExpandedExecutedGenericId(null);
+    try {
+      const raw = localStorage.getItem(executedGenericApisStorageKey);
+      if (!raw) {
+        setExecutedGenericApis([]);
+      } else {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const valid = parsed
+            .map((item) => normalizeExecutedGenericApiHistoryItem(item))
+            .filter(Boolean);
+          setExecutedGenericApis(valid.slice(0, REQUEST_HISTORY_LIMIT));
+        } else {
+          setExecutedGenericApis([]);
+        }
+      }
+    } catch {
+      setExecutedGenericApis([]);
+    } finally {
+      setExecutedGenericApisLoaded(true);
+    }
+  }, [executedGenericApisStorageKey]);
+
+  // Persist generic API history once restored.
+  useEffect(() => {
+    if (!executedGenericApisLoaded) return;
+    try {
+      localStorage.setItem(
+        executedGenericApisStorageKey,
+        JSON.stringify(executedGenericApis.slice(0, REQUEST_HISTORY_LIMIT))
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [executedGenericApis, executedGenericApisLoaded, executedGenericApisStorageKey]);
 
   // Restore saved elements for this Appium URL + session.
   useEffect(() => {
@@ -415,12 +548,30 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   };
 
   const handleRename = async (oldName, newName) => {
+    const normalizedOldName = normalizeCaptureName(oldName);
+    const normalizedNewName = normalizeCaptureName(newName);
+
+    if (!normalizedNewName || normalizedNewName === normalizedOldName) {
+      return false;
+    }
+
+    const hasDuplicate = captures.some((capture) => (
+      normalizeCaptureName(capture?.name) === normalizedNewName
+      && normalizeCaptureName(capture?.name) !== normalizedOldName
+    ));
+    if (hasDuplicate) {
+      setError('A capture with this name already exists');
+      return false;
+    }
+
     try {
-      await api.renameCapture(oldName, newName);
+      await api.renameCapture(oldName, newName.trim());
       await loadCaptures();
       setSelectedCapture(null);
+      return true;
     } catch (err) {
       setError('Rename failed: ' + err.message);
+      return false;
     }
   };
 
@@ -433,6 +584,20 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     } catch (err) {
       setError('Delete failed: ' + err.message);
     }
+  };
+
+  const handleRenameCaptureTile = async (captureName) => {
+    const newName = window.prompt('Enter a new capture name:', captureName)?.trim();
+    if (!newName || newName === captureName) return;
+    const renamed = await handleRename(captureName, newName);
+    if (renamed) {
+      setSuccess('Capture renamed successfully');
+    }
+  };
+
+  const handleDeleteCaptureTile = async (captureName) => {
+    if (!confirm(`Are you sure you want to delete capture "${captureName}"?`)) return;
+    await handleDelete(captureName);
   };
 
   const handleDeleteAll = async () => {
@@ -452,12 +617,14 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     const endpointToRun = executeScriptEndpoint;
     let payload = null;
     let requestText = '';
+    let responseText = '';
+    let statusCode = null;
 
     if (executeScriptMode === 'scriptOnly') {
       const scriptToRun = executeScript.trim();
       if (!scriptToRun) return;
       payload = { script: scriptToRun, args: [] };
-      requestText = scriptToRun;
+      requestText = JSON.stringify(payload, null, 2);
     } else {
       const payloadText = executeScriptWithArgsJson.trim();
       if (!payloadText) return;
@@ -504,21 +671,28 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
         payload,
         customHeaders
       );
-      setExecuteScriptResult(JSON.stringify(result, null, 2));
-      setExecuteScriptStatus(200);
+      responseText = JSON.stringify(result, null, 2);
+      statusCode = 200;
+      setExecuteScriptResult(responseText);
+      setExecuteScriptStatus(statusCode);
     } catch (err) {
-      setExecuteScriptResult(formatErrorForTextarea(err));
-      setExecuteScriptStatus('Error');
+      responseText = formatErrorForTextarea(err);
+      statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 'Error';
+      setExecuteScriptResult(responseText);
+      setExecuteScriptStatus(statusCode);
     } finally {
       setExecutedScripts((prev) => [
         {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          requestText,
+          method: 'POST',
+          payloadText: requestText,
+          responseText,
           endpoint: endpointToRun,
+          statusCode,
           executedAt: new Date().toISOString()
         },
         ...prev
-      ].slice(0, 20));
+      ].slice(0, REQUEST_HISTORY_LIMIT));
       setExecutingScript(false);
       await refreshLogsAfterWebDriverAction();
     }
@@ -536,13 +710,16 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const handleGenericRequest = async () => {
     if (!genericEndpoint.trim()) return;
 
+    const fullEndpoint = `/session/{session id}/${genericEndpoint.replace(/^\//, '')}`;
+    const payloadText = genericMethod === 'POST' ? genericPayload.trim() : '';
+    let responseText = '';
+    let statusCode = null;
+
     setSendingGeneric(true);
     setGenericResult('');
     setGenericStatus(null);
 
     try {
-      // Prepend /session/{session id}/ to the endpoint
-      const fullEndpoint = `/session/{session id}/${genericEndpoint.replace(/^\//, '')}`;
       const result = await api.genericRequest(
         appiumUrl,
         sessionId,
@@ -551,13 +728,92 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
         genericMethod === 'POST' ? genericPayload : null,
         customHeaders
       );
-      setGenericResult(JSON.stringify(result, null, 2));
-      setGenericStatus(200);
+      responseText = JSON.stringify(result, null, 2);
+      statusCode = 200;
+      setGenericResult(responseText);
+      setGenericStatus(statusCode);
     } catch (err) {
-      setGenericResult(formatErrorForTextarea(err));
-      setGenericStatus('Error');
+      responseText = formatErrorForTextarea(err);
+      statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 'Error';
+      setGenericResult(responseText);
+      setGenericStatus(statusCode);
     } finally {
+      setExecutedGenericApis((prev) => [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          method: genericMethod,
+          endpoint: fullEndpoint,
+          statusCode,
+          payloadText,
+          responseText,
+          executedAt: new Date().toISOString()
+        },
+        ...prev
+      ].slice(0, REQUEST_HISTORY_LIMIT));
       setSendingGeneric(false);
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleExportExecutedScripts = () => {
+    if (!executedScripts.length) {
+      setError('No executed requests to export');
+      return;
+    }
+
+    try {
+      const exportData = executedScripts.map((item) => ({
+        executedAt: item.executedAt,
+        method: item.method,
+        endpoint: item.endpoint,
+        statusCode: item.statusCode,
+        payload: item.payloadText,
+        response: item.responseText
+      }));
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `execute-script-history-${sessionId}-${timestamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccess(`Exported ${executedScripts.length} executed script request${executedScripts.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      setError('Failed to export executed requests: ' + err.message);
+    }
+  };
+
+  const handleExportExecutedGenericApis = () => {
+    if (!executedGenericApis.length) {
+      setError('No executed requests to export');
+      return;
+    }
+
+    try {
+      const exportData = executedGenericApis.map((item) => ({
+        executedAt: item.executedAt,
+        method: item.method,
+        endpoint: item.endpoint,
+        statusCode: item.statusCode,
+        payload: item.payloadText,
+        response: item.responseText
+      }));
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `generic-webdriver-history-${sessionId}-${timestamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccess(`Exported ${executedGenericApis.length} executed API request${executedGenericApis.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      setError('Failed to export executed requests: ' + err.message);
     }
   };
 
@@ -817,6 +1073,104 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   };
 
+  const handleOpenElementKeysModal = (element) => {
+    setElementKeysTarget({ id: element.id, name: element.name });
+    setElementKeysText('');
+    setElementKeysPayloadMode('w3c');
+    setShowElementKeysModal(true);
+  };
+
+  const handleCloseElementKeysModal = () => {
+    if (sendingElementKeys) return;
+    setShowElementKeysModal(false);
+    setElementKeysTarget(null);
+    setElementKeysText('');
+    setElementKeysPayloadMode('w3c');
+  };
+
+  const handleSendElementKeys = async () => {
+    if (!elementKeysTarget) return;
+
+    const textToSend = elementKeysText;
+    if (!textToSend.length) {
+      setError('Enter text to send');
+      return;
+    }
+
+    const actionKey = `keys:${elementKeysTarget.id}`;
+    setRunningElementAction(actionKey);
+    setSendingElementKeys(true);
+    setError('');
+
+    try {
+      await api.sendKeysToElement(
+        appiumUrl,
+        sessionId,
+        elementKeysTarget.id,
+        textToSend,
+        elementKeysPayloadMode,
+        customHeaders
+      );
+      setSuccess(`Sent keys to: ${elementKeysTarget.name}`);
+      setShowElementKeysModal(false);
+      setElementKeysTarget(null);
+      setElementKeysText('');
+      setElementKeysPayloadMode('w3c');
+    } catch (err) {
+      setError('Send keys failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      setSendingElementKeys(false);
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleOpenFocusedKeysModal = () => {
+    setFocusedKeysText('');
+    setFocusedKeysPayloadMode('w3c');
+    setShowFocusedKeysModal(true);
+  };
+
+  const handleCloseFocusedKeysModal = () => {
+    if (sendingFocusedKeys) return;
+    setShowFocusedKeysModal(false);
+    setFocusedKeysText('');
+    setFocusedKeysPayloadMode('w3c');
+  };
+
+  const handleSendFocusedKeys = async () => {
+    const textToSend = focusedKeysText;
+    if (!textToSend.length) {
+      setError('Enter text to send');
+      return;
+    }
+
+    const actionKey = 'focused:keys';
+    setRunningElementAction(actionKey);
+    setSendingFocusedKeys(true);
+    setError('');
+
+    try {
+      await api.sendKeysToFocusedElement(
+        appiumUrl,
+        sessionId,
+        textToSend,
+        focusedKeysPayloadMode,
+        customHeaders
+      );
+      setSuccess('Sent keys to focused element');
+      setShowFocusedKeysModal(false);
+      setFocusedKeysText('');
+      setFocusedKeysPayloadMode('w3c');
+    } catch (err) {
+      setError('Send focused keys failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      setSendingFocusedKeys(false);
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
   const parseCoordinatePair = () => {
     const x = Number(coordX);
     const y = Number(coordY);
@@ -1009,47 +1363,93 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                 captures.map((capture) => (
                   <div
                     key={capture.name}
-                    className={`w-full p-3 rounded-lg transition-colors ${
+                    className={`group w-full p-3 rounded-xl border transition-all ${
                       capture.metadata?.hasErrors
-                        ? 'bg-red-900/30 border border-red-700/50'
-                        : 'bg-gray-700'
+                        ? 'bg-gradient-to-b from-red-900/25 to-gray-800/90 border-red-700/60'
+                        : 'bg-gradient-to-b from-gray-700/90 to-gray-800/90 border-gray-600/70'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => setSelectedCapture(capture)}
-                        className="flex-1 text-left hover:opacity-80 transition-opacity cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          {capture.metadata?.hasErrors && (
-                            <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    <button
+                      onClick={() => setSelectedCapture(capture)}
+                      className="w-full text-left cursor-pointer mb-3"
+                      title="Open capture details"
+                    >
+                      <div className="rounded-lg border border-gray-600/70 bg-gray-900/50 px-3 py-2.5 group-hover:border-gray-500/80 transition-colors">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="min-w-0">
+                            <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Capture</p>
+                            <p className="text-sm font-semibold text-white break-all">{capture.name}</p>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-1.5">
+                            {capture.metadata?.hasErrors ? (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-red-700/70 bg-red-900/50 text-[10px] font-medium text-red-200">
+                                Error
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-700/70 bg-emerald-900/40 text-[10px] font-medium text-emerald-200">
+                                OK
+                              </span>
+                            )}
+                            <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                          )}
-                          <span className="text-white font-medium truncate">
-                            {capture.name}
-                          </span>
+                          </div>
                         </div>
-                        <div className="text-gray-400 text-xs mt-1">
-                          {new Date(capture.createdAt).toLocaleString()}
-                          {capture.metadata?.hasErrors && (
-                            <span className="text-red-400 ml-2">- Has errors</span>
-                          )}
+
+                        <div className="space-y-1.5">
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Context:</span>
+                            <span className="text-gray-100">{capture.metadata?.contextName || 'N/A'}</span>
+                          </p>
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Session ID:</span>
+                            <span className="font-mono text-gray-100">{capture.metadata?.sessionId || 'N/A'}</span>
+                          </p>
+                          <p className="text-xs text-gray-300 break-all">
+                            <span className="text-gray-500 mr-1">Date/Time:</span>
+                            <span className="text-gray-100">{formatCaptureDateTime(capture.metadata?.capturedAt || capture.createdAt)}</span>
+                          </p>
                         </div>
-                      </button>
+                        {capture.metadata?.hasErrors && (
+                          <p className="text-[11px] text-red-300 mt-2">Capture has errors. Open details for diagnostics.</p>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                       <button
                         onClick={() => handlePreview(capture)}
-                        className="px-3 py-1 text-xs bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 text-white rounded-md transition-colors cursor-pointer"
                         title="Preview screenshot"
                       >
                         Preview
                       </button>
                       <button
                         onClick={() => window.open(api.getViewerUrl(capture.name), '_blank')}
-                        className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shrink-0 cursor-pointer"
+                        className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white rounded-md transition-colors cursor-pointer"
                         title="Open in viewer"
                       >
-                        Open
+                        <span className="inline-flex items-center gap-1">
+                          Open
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3h7m0 0v7m0-7L10 14" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12v7a2 2 0 002 2h7" />
+                          </svg>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => handleRenameCaptureTile(capture.name)}
+                        className="px-3 py-1.5 text-xs bg-amber-600 hover:bg-amber-500 border border-amber-500 text-white rounded-md transition-colors cursor-pointer"
+                        title="Rename capture"
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCaptureTile(capture.name)}
+                        className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 border border-red-500 text-white rounded-md transition-colors cursor-pointer"
+                        title="Delete capture"
+                      >
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -1136,7 +1536,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
 
         {/* Element Finder and Saved Elements */} 
         <div id="elements-sections" className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          <div id="find-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[700px] overflow-y-auto">
+          <div id="find-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
             <h2 className="text-lg font-semibold text-white mb-2">Find Elements</h2>
             <p className="text-gray-400 text-xs mb-4">
               Find elements using WebDriver APIs and save a named element when exactly one match is returned.
@@ -1147,7 +1547,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                 <p className="text-[11px] text-gray-400 font-mono">POST /session/{'{sessionId}'}/elements</p>
               </div>
               <div className="bg-gray-900 border border-gray-700 rounded-lg p-2">
-                <p className="text-[11px] text-cyan-300 font-medium">FIND CHILD ELEMENT (MULTIPLE)</p>
+                <p className="text-[11px] text-cyan-300 font-medium">FIND CHILD ELEMENTS (MULTIPLE)</p>
                 <p className="text-[11px] text-gray-400 font-mono">POST /session/{'{sessionId}'}/element/{'{elementId}'}/elements</p>
               </div>
             </div>
@@ -1262,10 +1662,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             </div>
           </div>
 
-          <div id="saved-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[700px] overflow-y-auto">
+          <div id="saved-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
             <h2 className="text-lg font-semibold text-white mb-2">Saved Elements</h2>
             <p className="text-gray-400 text-xs mb-4">
-              Save named element references, re-check existence, and run tap/click actions.
+              Save named element references, re-check existence, and run tap/click/keys actions.
             </p>
 
             <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
@@ -1327,6 +1727,17 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   Click
                 </button>
               </div>
+              <button
+                onClick={handleOpenFocusedKeysModal}
+                disabled={sendingFocusedKeys || runningElementAction === 'focused:keys'}
+                className="mt-2 px-3 py-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
+                </svg>
+                Send Keys To Focused Element
+              </button>
             </div>
 
             {pendingElementId && (
@@ -1360,6 +1771,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   const isCheckingExists = runningElementAction === `exists:${element.id}`;
                   const isGettingRect = runningElementAction === `rect:${element.id}`;
                   const isTappingAtLocation = runningElementAction === `taploc:${element.id}`;
+                  const isTappingElement = runningElementAction === `tap:${element.id}`;
+                  const isClickingElement = runningElementAction === `click:${element.id}`;
+                  const isSendingKeysToElement = runningElementAction === `keys:${element.id}`;
                   const rect = normalizeRect(element.rect);
                   const statusLabel = isCheckingExists
                     ? 'Checking...'
@@ -1378,7 +1792,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   return (
                     <div
                       key={element.id}
-                      className={`p-3 rounded-lg border ${
+                      className={`group p-3 rounded-lg border ${
                         rowMuted
                           ? 'bg-gray-900/60 border-gray-700 opacity-60'
                           : 'bg-gray-700 border-gray-600'
@@ -1399,61 +1813,75 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                               : 'Rect: not fetched'}
                           </p>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => handleCheckElementExists(element)}
-                            disabled={isCheckingExists}
-                            className="px-2 py-1 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-600 text-white rounded text-[11px] cursor-pointer"
-                            title="Check element exists"
-                          >
-                            Exists
-                          </button>
-                          <button
-                            onClick={() => handleGetElementRect(element)}
-                            disabled={isGettingRect}
-                            className="px-2 py-1 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white rounded text-[11px] cursor-pointer"
-                            title="Get element rect"
-                          >
-                            {isGettingRect ? 'Rect...' : 'Rect'}
-                          </button>
-                          <button
-                            onClick={() => handleTapElement(element)}
-                            disabled={runningElementAction === `tap:${element.id}`}
-                            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-[11px] cursor-pointer"
-                            title="Tap element"
-                          >
-                            Tap
-                          </button>
-                          <button
-                            onClick={() => handleTapAtElementLocation(element)}
-                            disabled={isTappingAtLocation}
-                            className="px-2 py-1 bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 text-white rounded text-[11px] cursor-pointer"
-                            title="Tap at element location"
-                          >
-                            {isTappingAtLocation ? 'Tap@Loc...' : 'Tap @Loc'}
-                          </button>
-                          <button
-                            onClick={() => handleClickElement(element)}
-                            disabled={runningElementAction === `click:${element.id}`}
-                            className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-[11px] cursor-pointer"
-                            title="Click element"
-                          >
-                            Click
-                          </button>
-                          <button
-                            onClick={() => handleRenameSavedElement(element.id)}
-                            className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] cursor-pointer"
-                            title="Rename element"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSavedElement(element.id)}
-                            className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[11px] cursor-pointer"
-                            title="Delete element"
-                          >
-                            Delete
-                          </button>
+                        <div className="hidden group-hover:block shrink-0 w-full max-w-[288px]">
+                          <div className="grid grid-cols-4 gap-1">
+                            <button
+                              onClick={() => handleCheckElementExists(element)}
+                              disabled={isCheckingExists}
+                              className="h-7 w-full bg-gray-600 hover:bg-gray-500 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Check element exists"
+                            >
+                              Exists
+                            </button>
+                            <button
+                              onClick={() => handleGetElementRect(element)}
+                              disabled={isGettingRect}
+                              className="h-7 w-full bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element rect"
+                            >
+                              {isGettingRect ? 'Rect...' : 'Rect'}
+                            </button>
+                            <button
+                              onClick={() => handleRenameSavedElement(element.id)}
+                              className="h-7 w-full bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Rename element"
+                            >
+                              Rename
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSavedElement(element.id)}
+                              className="h-7 w-full bg-red-600 hover:bg-red-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Delete element"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => handleTapElement(element)}
+                              disabled={isTappingElement}
+                              className="h-7 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Tap element"
+                            >
+                              {isTappingElement ? 'Tap...' : 'Tap'}
+                            </button>
+                            <button
+                              onClick={() => handleTapAtElementLocation(element)}
+                              disabled={isTappingAtLocation}
+                              className="h-7 w-full bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Tap at element location"
+                            >
+                              {isTappingAtLocation ? 'Tap@Loc...' : 'Tap @Loc'}
+                            </button>
+                            <button
+                              onClick={() => handleClickElement(element)}
+                              disabled={isClickingElement}
+                              className="h-7 w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Click element"
+                            >
+                              {isClickingElement ? 'Click...' : 'Click'}
+                            </button>
+                            <button
+                              onClick={() => handleOpenElementKeysModal(element)}
+                              disabled={isSendingKeysToElement}
+                              className="h-7 w-full bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center gap-1"
+                              title="Send keys to element"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
+                              </svg>
+                              {isSendingKeysToElement ? 'Keys...' : 'Keys'}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1541,7 +1969,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   </label>
                   {executeScriptStatus !== null && (
                     <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                      executeScriptStatus === 200 ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                      isSuccessStatusCode(executeScriptStatus)
+                        ? 'bg-green-900/50 text-green-400'
+                        : 'bg-red-900/50 text-red-400'
                     }`}>
                       {executeScriptStatus}
                     </span>
@@ -1559,31 +1989,82 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-gray-300 text-sm font-medium">
-                    Executed Scripts (last 20) - {executedScripts.length}
+                    Executed Scripts (last {REQUEST_HISTORY_LIMIT}) - {executedScripts.length}
                   </label>
+                  <button
+                    onClick={handleExportExecutedScripts}
+                    disabled={executedScripts.length === 0}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
+                    title="Export execute script history"
+                  >
+                    Export JSON
+                  </button>
                 </div>
                 <div className="space-y-2 max-h-56 overflow-y-auto">
                   {executedScripts.length === 0 ? (
                     <p className="text-gray-500 text-sm">No scripts executed yet</p>
                   ) : (
                     executedScripts.map((item) => (
-                      <div key={item.id} className="bg-gray-900 border border-gray-700 rounded-lg p-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-cyan-300 text-[11px] font-mono mb-1">{item.endpoint}</p>
-                            <pre className="text-gray-300 text-xs font-mono whitespace-pre-wrap break-words">{item.requestText || item.script}</pre>
-                            <p className="text-gray-500 text-[10px] mt-1">
-                              {new Date(item.executedAt).toLocaleString()}
-                            </p>
+                      <div key={item.id} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => setExpandedExecutedScriptId((prev) => (prev === item.id ? null : item.id))}
+                          className="w-full px-3 py-2 hover:bg-gray-800/70 text-left cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <svg
+                                className={`w-3 h-3 text-gray-400 transition-transform ${expandedExecutedScriptId === item.id ? 'rotate-90' : ''}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
+                              <span className="font-mono text-xs px-2 py-0.5 rounded bg-blue-900/50 text-blue-300 shrink-0">
+                                {item.method}
+                              </span>
+                              <span className="text-cyan-300 text-[11px] font-mono truncate">{item.endpoint}</span>
+                            </div>
+                            <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
+                              isSuccessStatusCode(item.statusCode)
+                                ? 'bg-green-900/50 text-green-400'
+                                : item.statusCode === null
+                                  ? 'bg-gray-700 text-gray-400'
+                                  : 'bg-red-900/50 text-red-400'
+                            }`}>
+                              {item.statusCode ?? '-'}
+                            </span>
                           </div>
-                          <button
-                            onClick={() => handleCopyScript(item.requestText || item.script || '')}
-                            className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-[11px] shrink-0 cursor-pointer"
-                            title="Copy request"
-                          >
-                            Copy
-                          </button>
-                        </div>
+                          <p className="text-gray-500 text-[10px] mt-1 ml-5">
+                            {new Date(item.executedAt).toLocaleString()}
+                          </p>
+                        </button>
+                        {expandedExecutedScriptId === item.id && (
+                          <div className="border-t border-gray-700 px-3 py-3 space-y-3">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-gray-400 text-xs">Payload</p>
+                                <button
+                                  onClick={() => handleCopyScript(item.payloadText || '')}
+                                  disabled={!item.payloadText}
+                                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
+                                  title="Copy payload"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {item.payloadText || '(empty)'}
+                              </pre>
+                            </div>
+                            <div>
+                              <p className="text-gray-400 text-xs mb-1">Response</p>
+                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {item.responseText || '(empty)'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -1661,7 +2142,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   </label>
                   {genericStatus !== null && (
                     <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                      genericStatus === 200 ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                      isSuccessStatusCode(genericStatus)
+                        ? 'bg-green-900/50 text-green-400'
+                        : 'bg-red-900/50 text-red-400'
                     }`}>
                       {genericStatus}
                     </span>
@@ -1674,6 +2157,86 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   placeholder="Response will appear here..."
                   className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-gray-300 placeholder-gray-500 font-mono text-sm resize-none"
                 />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-gray-300 text-sm font-medium">
+                    Executed WebDriver APIs (last {REQUEST_HISTORY_LIMIT}) - {executedGenericApis.length}
+                  </label>
+                  <button
+                    onClick={handleExportExecutedGenericApis}
+                    disabled={executedGenericApis.length === 0}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
+                    title="Export generic API history"
+                  >
+                    Export JSON
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-56 overflow-y-auto">
+                  {executedGenericApis.length === 0 ? (
+                    <p className="text-gray-500 text-sm">No APIs executed yet</p>
+                  ) : (
+                    executedGenericApis.map((item) => (
+                      <div key={item.id} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => setExpandedExecutedGenericId((prev) => (prev === item.id ? null : item.id))}
+                          className="w-full px-3 py-2 hover:bg-gray-800/70 text-left cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <svg
+                                className={`w-3 h-3 text-gray-400 transition-transform ${expandedExecutedGenericId === item.id ? 'rotate-90' : ''}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
+                              <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
+                                item.method === 'GET' ? 'bg-green-900/50 text-green-400' :
+                                item.method === 'POST' ? 'bg-blue-900/50 text-blue-400' :
+                                item.method === 'DELETE' ? 'bg-red-900/50 text-red-400' :
+                                'bg-gray-700 text-gray-300'
+                              }`}>
+                                {item.method}
+                              </span>
+                              <span className="text-cyan-300 text-[11px] font-mono truncate">{item.endpoint}</span>
+                            </div>
+                            <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
+                              isSuccessStatusCode(item.statusCode)
+                                ? 'bg-green-900/50 text-green-400'
+                                : item.statusCode === null
+                                  ? 'bg-gray-700 text-gray-400'
+                                  : 'bg-red-900/50 text-red-400'
+                            }`}>
+                              {item.statusCode ?? '-'}
+                            </span>
+                          </div>
+                          <p className="text-gray-500 text-[10px] mt-1 ml-5">
+                            {new Date(item.executedAt).toLocaleString()}
+                          </p>
+                        </button>
+                        {expandedExecutedGenericId === item.id && (
+                          <div className="border-t border-gray-700 px-3 py-3 space-y-3">
+                            <div>
+                              <p className="text-gray-400 text-xs mb-1">Payload</p>
+                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {item.payloadText || '(empty)'}
+                              </pre>
+                            </div>
+                            <div>
+                              <p className="text-gray-400 text-xs mb-1">Response</p>
+                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {item.responseText || '(empty)'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1810,6 +2373,173 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             onRename={handleRename}
             onDelete={handleDelete}
           />
+        )}
+
+        {/* Send Keys Modal */}
+        {showElementKeysModal && elementKeysTarget && (
+          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl">
+              <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                <div className="min-w-0">
+                  <h3 className="text-white font-semibold">Send Keys</h3>
+                  <p className="text-[11px] text-gray-400 font-mono truncate">
+                    {elementKeysTarget.name} ({elementKeysTarget.id})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseElementKeysModal}
+                  disabled={sendingElementKeys}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-gray-200 rounded text-sm cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <p className="text-[11px] text-cyan-300 font-mono break-all">
+                  POST /session/{sessionId}/element/{elementKeysTarget.id}/value
+                </p>
+
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-1">Text</label>
+                  <textarea
+                    value={elementKeysText}
+                    onChange={(e) => setElementKeysText(e.target.value)}
+                    rows={5}
+                    placeholder="Type text to send to this element..."
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500 font-mono text-sm resize-y"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-1">Payload Mode</label>
+                  <select
+                    value={elementKeysPayloadMode}
+                    onChange={(e) => setElementKeysPayloadMode(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm"
+                  >
+                    <option value="w3c">W3C-preferred (use this by default)</option>
+                    <option value="legacy">Legacy-compatible (use only when you need control)</option>
+                  </select>
+                </div>
+
+                <div className="bg-gray-900 border border-gray-700 rounded-lg p-2">
+                  <p className="text-[11px] text-gray-400 mb-1">Payload Preview</p>
+                  <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                    {JSON.stringify(
+                      elementKeysPayloadMode === 'legacy'
+                        ? { value: Array.from(elementKeysText) }
+                        : { text: elementKeysText },
+                      null,
+                      2
+                    )}
+                  </pre>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseElementKeysModal}
+                    disabled={sendingElementKeys}
+                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-sm cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendElementKeys}
+                    disabled={sendingElementKeys || elementKeysText.length === 0}
+                    className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 disabled:text-gray-300 text-white rounded text-sm cursor-pointer"
+                  >
+                    {sendingElementKeys ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Send Focused Keys Modal */}
+        {showFocusedKeysModal && (
+          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl">
+              <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                <div className="min-w-0">
+                  <h3 className="text-white font-semibold">Send Keys To Focused Element</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseFocusedKeysModal}
+                  disabled={sendingFocusedKeys}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-gray-200 rounded text-sm cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <p className="text-[11px] text-cyan-300 font-mono break-all">
+                  POST /session/{sessionId}/keys
+                </p>
+
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-1">Text</label>
+                  <textarea
+                    value={focusedKeysText}
+                    onChange={(e) => setFocusedKeysText(e.target.value)}
+                    rows={5}
+                    placeholder="Type text to send to focused element..."
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500 font-mono text-sm resize-y"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-1">Payload Mode</label>
+                  <select
+                    value={focusedKeysPayloadMode}
+                    onChange={(e) => setFocusedKeysPayloadMode(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm"
+                  >
+                    <option value="w3c">W3C-preferred (use this by default)</option>
+                    <option value="legacy">Legacy-compatible (use only when you need control)</option>
+                  </select>
+                </div>
+
+                <div className="bg-gray-900 border border-gray-700 rounded-lg p-2">
+                  <p className="text-[11px] text-gray-400 mb-1">Payload Preview</p>
+                  <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                    {JSON.stringify(
+                      focusedKeysPayloadMode === 'legacy'
+                        ? { value: Array.from(focusedKeysText) }
+                        : { text: focusedKeysText },
+                      null,
+                      2
+                    )}
+                  </pre>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseFocusedKeysModal}
+                    disabled={sendingFocusedKeys}
+                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-sm cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendFocusedKeys}
+                    disabled={sendingFocusedKeys || focusedKeysText.length === 0}
+                    className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 disabled:text-gray-300 text-white rounded text-sm cursor-pointer"
+                  >
+                    {sendingFocusedKeys ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Strategy Reference Modal */}

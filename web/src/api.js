@@ -142,7 +142,7 @@ export const api = {
   },
 
   getViewerUrl(captureName) {
-    return `${API_BASE}/view/${captureName}/viewer.html`;
+    return `${API_BASE}/view/${encodeURIComponent(captureName)}/viewer.html`;
   },
 
   async renameCapture(oldName, newName) {
@@ -247,6 +247,40 @@ export const api = {
       `/session/{session id}/element/${encodeURIComponent(elementId)}/click`,
       'POST',
       {},
+      customHeaders
+    );
+  },
+
+  async sendKeysToElement(appiumUrl, sessionId, elementId, text, mode = 'w3c', customHeaders = {}) {
+    const textValue = typeof text === 'string' ? text : String(text ?? '');
+    const resolvedMode = typeof mode === 'string' ? mode : 'w3c';
+    const payload = resolvedMode === 'legacy'
+      ? { value: Array.from(textValue) }
+      : { text: textValue };
+
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/value`,
+      'POST',
+      payload,
+      customHeaders
+    );
+  },
+
+  async sendKeysToFocusedElement(appiumUrl, sessionId, text, mode = 'w3c', customHeaders = {}) {
+    const textValue = typeof text === 'string' ? text : String(text ?? '');
+    const resolvedMode = typeof mode === 'string' ? mode : 'w3c';
+    const payload = resolvedMode === 'legacy'
+      ? { value: Array.from(textValue) }
+      : { text: textValue };
+
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      '/session/{session id}/keys',
+      'POST',
+      payload,
       customHeaders
     );
   },

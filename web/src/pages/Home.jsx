@@ -44,7 +44,7 @@ const VENDORS = {
   }
 };
 
-export default function Home({ onConnect }) {
+export default function Home({ onConnect, onOpenCaptures }) {
   // Local Appium state
   const [appiumUrl, setAppiumUrl] = useState(() => {
     return localStorage.getItem(APPIUM_URL_KEY) || 'http://localhost:4723/wd/hub';
@@ -318,18 +318,30 @@ export default function Home({ onConnect }) {
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 flex flex-col">
       {/* Header */}
       <header className="pt-12 pb-8 px-4">
-        <div className="max-w-5xl mx-auto text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg shadow-purple-500/20">
-            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
+        <div className="max-w-5xl mx-auto">
+          <div className="flex justify-end mb-3">
+            <button
+              type="button"
+              onClick={onOpenCaptures}
+              className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 rounded-lg transition-colors cursor-pointer"
+              title="Open saved captures"
+            >
+              Saved Captures
+            </button>
           </div>
-          <h1 className="text-4xl font-bold text-white mb-2">
-            Appium Helper
-          </h1>
-          <p className="text-gray-400 text-lg">
-            Connect to local or cloud Appium sessions, reattach to active session IDs, and debug with screenshots, XML source, and WebDriver actions
-          </p>
+          <div className="text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg shadow-purple-500/20">
+              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <h1 className="text-4xl font-bold text-white mb-2">
+              Appium Helper
+            </h1>
+            <p className="text-gray-400 text-lg">
+              Connect to local or cloud Appium sessions, reattach to active session IDs, and debug with screenshots, XML source, and WebDriver actions
+            </p>
+          </div>
         </div>
       </header>
 
