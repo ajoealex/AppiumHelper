@@ -93,21 +93,30 @@ npm run docker:remove
   - Capture uses the context selected by the user.
 - Screenshot preview:
   - `Live` mode supports configurable refetch interval in seconds.
+  - Interval is applied with an explicit `Set` button (or Enter key).
 - Elements section (between captures preview and advanced tools):
   - Left panel:
     - Find elements on mobile screen (`POST /session/{sessionId}/elements`)
     - Find child elements under parent (`POST /session/{sessionId}/element/{elementId}/elements`)
     - Supports standard WebDriver locators plus mobile-specific Appium locators.
     - Parent field accepts saved element name or raw element id.
+    - When find returns a single match, the locator strategy + locator value are captured for saved-element reuse.
   - Right panel:
     - Save elements automatically (single-match find) or manually (name + id).
-    - Per-element actions are shown on tile hover in a 2-row layout:
-      - Row 1: Exists, Rect, Rename, Delete
-      - Row 2: Tap, Tap @Loc, Click, Keys
+    - Duplicate element-id saves are prevented; existing tile auto-scrolls into view and blinks.
+    - Saved element tile quick actions include:
+      - `Exists` (re-check element by id)
+      - `Find` (re-find by saved locator strategy/value)
+      - `Expand Advanced` (shows advanced actions + fetched values)
+    - If `Find` resolves to a different element id, the tile id is updated and a `Refreshed` badge appears.
+    - Tile top actions include `Rename`, `Clear`, and `Delete`.
+    - Advanced actions include Text, Property/Attribute, CSS, Displayed, Enabled, Rect, Tap, Tap @ Location, Click, and Keys.
     - `Keys` opens a popup with payload mode dropdown:
       - `W3C-preferred (use this by default)` -> `{ "text": "..." }`
       - `Legacy-compatible (use only when you need control)` -> `{ "value": ["..."] }`
-    - Coordinate actions: Tap and Click by X/Y.
+    - Coordinate actions are split into two subsections:
+      - `oordinate action`: Tap and Click by X/Y
+      - `Swipe by coordinate`: swipe from X1/Y1 to X2/Y2, with a `Swap` button to swap start/end pairs
     - `Send Keys To Focused Element` button (below coordinate actions) opens a popup with the same payload mode dropdown and sends focused keys (`POST /session/{sessionId}/keys` on Appium).
 - Advanced sections:
   - Execute Script:
@@ -115,7 +124,7 @@ npm run docker:remove
   - Generic WebDriver API:
     - Executed API history (last 10), expandable tiles, JSON export.
 - Logs:
-  - Element-related WebDriver actions (find/exists/tap/click and coordinate tap/click) trigger log refresh so calls appear immediately.
+  - Element-related WebDriver actions (find, exists, locator-find, tap/click, coordinate tap/click/swipe, keys, and value fetches) trigger log refresh so calls appear immediately.
 
 ## API Endpoints
 
@@ -124,22 +133,42 @@ npm run docker:remove
 | `/sessions` | GET | List sessions from Appium |
 | `/session/:id/source` | GET | Get page source |
 | `/session/:id/contexts` | GET | Get available contexts |
+| `/session/:id/context` | POST | Set active context |
 | `/session/:id/screenshot` | GET | Get screenshot (base64) |
 | `/session/:id/element/:eid/screenshot` | GET | Get element screenshot |
+| `/session/:id/execute` | POST | Execute script wrapper |
 | `/session/:id/capture` | POST | Capture source and screenshot |
 | `/session/:id/generic` | POST | Generic WebDriver API proxy |
+| `/logs` | GET | Read recent API logs |
+| `/logs` | DELETE | Delete all API logs |
 | `/captures` | GET | List all captures |
+| `/captures` | DELETE | Delete all captures |
 | `/captures/:name/screenshot` | GET | Get capture screenshot |
 | `/captures/:name/source` | GET | Get capture source XML |
 | `/captures/:name/rename` | POST | Rename a capture folder |
+| `/captures/:name` | DELETE | Delete one capture folder |
 
 All endpoints that proxy to Appium require the `X-Appium-URL` header.
 
 Notes:
 - The frontend sends WebDriver/Appium calls through `/session/:id/generic`.
-- Examples:
-  - Element keys: `POST /session/{sessionId}/element/{elementId}/value`
-  - Focused keys: `POST /session/{sessionId}/keys`
+- WebDriver commands currently used by the UI (through `/session/:id/generic` unless noted):
+  - `GET /session/{sessionId}/context`
+  - `POST /session/{sessionId}/elements`
+  - `POST /session/{sessionId}/element/{elementId}/elements`
+  - `GET /session/{sessionId}/element/{elementId}/rect`
+  - `GET /session/{sessionId}/element/{elementId}/text`
+  - `GET /session/{sessionId}/element/{elementId}/property/{name}`
+  - `GET /session/{sessionId}/element/{elementId}/attribute/{name}`
+  - `GET /session/{sessionId}/element/{elementId}/css/{propertyName}`
+  - `GET /session/{sessionId}/element/{elementId}/displayed`
+  - `GET /session/{sessionId}/element/{elementId}/enabled`
+  - `POST /session/{sessionId}/element/{elementId}/click`
+  - `POST /session/{sessionId}/element/{elementId}/value`
+  - `POST /session/{sessionId}/keys`
+  - `POST /session/{sessionId}/actions` (tap, click, swipe)
+  - `POST /session/{sessionId}/execute`
+  - `POST /session/{sessionId}/execute/sync`
 
 ## Captures
 
