@@ -2,6 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import CaptureViewer from '../components/CaptureViewer';
+import SessionHeader from '../components/session/SessionHeader';
+import CaptureControlsSection from '../components/session/CaptureControlsSection';
+import CapturesPreviewSection from '../components/session/CapturesPreviewSection';
+import AdvancedSections from '../components/session/AdvancedSections';
+import ApiLogsSection from '../components/session/ApiLogsSection';
 
 const ELEMENT_ID_KEYS = ['element-6066-11e4-a52e-4f735466cecf', 'ELEMENT'];
 const FIND_STRATEGIES = [
@@ -41,6 +46,7 @@ const EXECUTE_SCRIPT_PAYLOAD_EXAMPLE = `{
 }`;
 const REQUEST_HISTORY_LIMIT = 10;
 const GENERIC_SESSION_ENDPOINT_PREFIX = '/session/{session id}/';
+const SCREENSHOT_SWIPE_THRESHOLD_PX = 24;
 const WEBDRIVER_REFERENCE_PRESETS = [
   { title: 'New Session', method: 'POST', endpoint: '/session', payload: '{\\n  "capabilities": {\\n    "alwaysMatch": {\\n      "browserName": "chrome"\\n    }\\n  }\\n}' },
   { title: 'Delete Session', method: 'DELETE', endpoint: '/session/{sessionId}', payload: '' },
@@ -339,6 +345,36 @@ function normalizeCaptureName(value) {
   return (value || '').trim().toLowerCase();
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function mapPointerToDeviceCoordinates(pointerEvent, imageElement, viewportSize = null) {
+  if (!pointerEvent || !imageElement) return null;
+  const rect = imageElement.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+
+  const viewportWidth = Number(viewportSize?.width);
+  const viewportHeight = Number(viewportSize?.height);
+  const targetWidth = Number.isFinite(viewportWidth) && viewportWidth > 0
+    ? Math.round(viewportWidth)
+    : imageElement.naturalWidth;
+  const targetHeight = Number.isFinite(viewportHeight) && viewportHeight > 0
+    ? Math.round(viewportHeight)
+    : imageElement.naturalHeight;
+  if (!targetWidth || !targetHeight) return null;
+
+  const relativeX = clampNumber(pointerEvent.clientX - rect.left, 0, rect.width);
+  const relativeY = clampNumber(pointerEvent.clientY - rect.top, 0, rect.height);
+  const maxX = Math.max(targetWidth - 1, 0);
+  const maxY = Math.max(targetHeight - 1, 0);
+  const x = Math.round((relativeX / rect.width) * maxX);
+  const y = Math.round((relativeY / rect.height) * maxY);
+  return { x, y };
+}
+
 function renderModalInViewport(content) {
   if (typeof document === 'undefined') return null;
   return createPortal(content, document.body);
@@ -362,6 +398,17 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [autoRefreshScreenshot, setAutoRefreshScreenshot] = useState(false);
   const [screenshotRefreshSeconds, setScreenshotRefreshSeconds] = useState(10);
   const [screenshotRefreshSecondsInput, setScreenshotRefreshSecondsInput] = useState('10');
+  const [isScreenshotInteractExpanded, setIsScreenshotInteractExpanded] = useState(false);
+  const [lastScreenshotPressCoordinates, setLastScreenshotPressCoordinates] = useState(null);
+  const [deviceWindowRect, setDeviceWindowRect] = useState(null);
+  const [showScreenshotSendKeysInput, setShowScreenshotSendKeysInput] = useState(false);
+  const [screenshotSendKeysText, setScreenshotSendKeysText] = useState('');
+  const [sendingScreenshotKeys, setSendingScreenshotKeys] = useState(false);
+  const screenshotLiveImageRef = useRef(null);
+  const screenshotGestureRef = useRef(null);
+  const wasScreenshotInteractModeEnabledRef = useRef(false);
+  const [screenshotGestureStart, setScreenshotGestureStart] = useState(null);
+  const [screenshotGestureCurrent, setScreenshotGestureCurrent] = useState(null);
 
   // Element finder state
   const [findScope, setFindScope] = useState('screen');
@@ -471,6 +518,18 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     elementPropertyTarget?.id,
     elementPropertyNameTrimmed
   );
+  const isLiveScreenshotInteractable = (
+    !previewCapture
+    && Boolean(currentScreenshot)
+    && autoRefreshScreenshot
+    && isScreenshotInteractExpanded
+  );
+  const isScreenshotInteractModeEnabled = (
+    !previewCapture
+    && autoRefreshScreenshot
+    && isScreenshotInteractExpanded
+  );
+  const isRunningScreenshotGesture = runningElementAction === 'screenshot:gesture';
 
   const focusSavedElementTile = useCallback((elementId) => {
     if (!elementId) return;
@@ -537,6 +596,32 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   }, [appiumUrl, sessionId, customHeaders]);
 
+  const fetchDeviceWindowRect = useCallback(async ({ silent = false } = {}) => {
+    try {
+      const rectResponse = await api.getWindowRect(appiumUrl, sessionId, customHeaders);
+      const rectValue = rectResponse?.value || {};
+      const width = Number(rectValue.width);
+      const height = Number(rectValue.height);
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        throw new Error('Invalid viewport size returned from /window/rect');
+      }
+      const nextRect = {
+        x: Number.isFinite(Number(rectValue.x)) ? Number(rectValue.x) : 0,
+        y: Number.isFinite(Number(rectValue.y)) ? Number(rectValue.y) : 0,
+        width: Math.round(width),
+        height: Math.round(height),
+        fetchedAt: Date.now()
+      };
+      setDeviceWindowRect(nextRect);
+      return nextRect;
+    } catch (err) {
+      if (!silent) {
+        setError('Failed to get device window rect: ' + err.message);
+      }
+      return null;
+    }
+  }, [appiumUrl, sessionId, customHeaders]);
+
   const loadCaptures = useCallback(async () => {
     try {
       const data = await api.getCaptures();
@@ -590,6 +675,30 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }, parsedScreenshotRefreshSeconds * 1000);
     return () => clearInterval(interval);
   }, [autoRefreshScreenshot, parsedScreenshotRefreshSeconds]);
+
+  useEffect(() => {
+    if (autoRefreshScreenshot && !previewCapture) return;
+    setIsScreenshotInteractExpanded(false);
+  }, [autoRefreshScreenshot, previewCapture]);
+
+  useEffect(() => {
+    if (isLiveScreenshotInteractable) return;
+    screenshotGestureRef.current = null;
+    setScreenshotGestureStart(null);
+    setScreenshotGestureCurrent(null);
+  }, [isLiveScreenshotInteractable]);
+
+  useEffect(() => {
+    setDeviceWindowRect(null);
+    wasScreenshotInteractModeEnabledRef.current = false;
+  }, [appiumUrl, sessionId]);
+
+  useEffect(() => {
+    if (isScreenshotInteractModeEnabled && !wasScreenshotInteractModeEnabledRef.current) {
+      void fetchDeviceWindowRect({ silent: true });
+    }
+    wasScreenshotInteractModeEnabledRef.current = isScreenshotInteractModeEnabled;
+  }, [isScreenshotInteractModeEnabled, fetchDeviceWindowRect]);
 
   // Auto-dismiss messages after 5 seconds
   useEffect(() => {
@@ -1019,6 +1128,147 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     setScreenshotRefreshSeconds(nextInterval);
     setScreenshotRefreshSecondsInput(String(nextInterval));
     setSuccess(`Live refresh interval set to ${nextInterval} second${nextInterval === 1 ? '' : 's'}`);
+  };
+
+  const handleSendScreenshotKeys = async () => {
+    const textToSend = screenshotSendKeysText;
+    if (!textToSend.length) {
+      setError('Enter text to send');
+      return;
+    }
+
+    const actionKey = 'screenshot:keys';
+    setRunningElementAction(actionKey);
+    setSendingScreenshotKeys(true);
+    setError('');
+
+    try {
+      await api.sendKeysByActions(appiumUrl, sessionId, textToSend, customHeaders);
+      setSuccess(`Sent ${textToSend.length} key${textToSend.length === 1 ? '' : 's'} via actions`);
+      setScreenshotSendKeysText('');
+      setShowScreenshotSendKeysInput(false);
+    } catch (err) {
+      setError('Screenshot send keys failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      setSendingScreenshotKeys(false);
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const resetLiveScreenshotGesture = () => {
+    screenshotGestureRef.current = null;
+    setScreenshotGestureStart(null);
+    setScreenshotGestureCurrent(null);
+  };
+
+  const handleLiveScreenshotPointerDown = (event) => {
+    if (!isLiveScreenshotInteractable || isRunningScreenshotGesture) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (!deviceWindowRect?.width || !deviceWindowRect?.height) {
+      void fetchDeviceWindowRect({ silent: false });
+      return;
+    }
+
+    const imageElement = screenshotLiveImageRef.current;
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, deviceWindowRect);
+    if (!mapped) return;
+
+    screenshotGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: mapped.x,
+      startY: mapped.y,
+      currentX: mapped.x,
+      currentY: mapped.y,
+      viewportWidth: deviceWindowRect.width,
+      viewportHeight: deviceWindowRect.height
+    };
+    setLastScreenshotPressCoordinates({ x: mapped.x, y: mapped.y });
+    setScreenshotGestureStart({ x: mapped.x, y: mapped.y });
+    setScreenshotGestureCurrent({ x: mapped.x, y: mapped.y });
+
+    if (event.currentTarget?.setPointerCapture) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore pointer capture errors.
+      }
+    }
+    event.preventDefault();
+  };
+
+  const handleLiveScreenshotPointerMove = (event) => {
+    const gesture = screenshotGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+    const imageElement = screenshotLiveImageRef.current;
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, {
+      width: gesture.viewportWidth,
+      height: gesture.viewportHeight
+    });
+    if (!mapped) return;
+
+    gesture.currentX = mapped.x;
+    gesture.currentY = mapped.y;
+    setScreenshotGestureCurrent({ x: mapped.x, y: mapped.y });
+    event.preventDefault();
+  };
+
+  const handleLiveScreenshotPointerUp = async (event) => {
+    const gesture = screenshotGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+    const imageElement = screenshotLiveImageRef.current;
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, {
+      width: gesture.viewportWidth,
+      height: gesture.viewportHeight
+    });
+    const endX = mapped?.x ?? gesture.currentX;
+    const endY = mapped?.y ?? gesture.currentY;
+    const startX = gesture.startX;
+    const startY = gesture.startY;
+
+    if (event.currentTarget?.releasePointerCapture) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Ignore pointer release errors.
+      }
+    }
+
+    resetLiveScreenshotGesture();
+
+    const swipeDistance = Math.hypot(endX - startX, endY - startY);
+    const shouldSwipe = swipeDistance >= SCREENSHOT_SWIPE_THRESHOLD_PX;
+    const actionKey = 'screenshot:gesture';
+
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      if (shouldSwipe) {
+        setSwipeX1(String(startX));
+        setSwipeY1(String(startY));
+        setSwipeX2(String(endX));
+        setSwipeY2(String(endY));
+        await api.swipeByCoordinates(appiumUrl, sessionId, startX, startY, endX, endY, customHeaders);
+        setSuccess(`Screenshot swipe sent (${startX}, ${startY}) -> (${endX}, ${endY})`);
+      } else {
+        setCoordX(String(startX));
+        setCoordY(String(startY));
+        await api.tapByCoordinates(appiumUrl, sessionId, startX, startY, customHeaders);
+        setSuccess(`Screenshot tap sent (${startX}, ${startY})`);
+      }
+    } catch (err) {
+      setError(`Screenshot ${shouldSwipe ? 'swipe' : 'tap'} failed: ${err.message}`);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+    event.preventDefault();
+  };
+
+  const handleLiveScreenshotPointerCancel = () => {
+    resetLiveScreenshotGesture();
   };
 
   const handleRename = async (oldName, newName) => {
@@ -2175,345 +2425,78 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white text-lg">Loading...</div>
+      <div className="session-loading-screen min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="session-loading-text text-white text-lg">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 p-4">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div id="session-header" className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-white">Session Controls</h1>
-            <p className="text-gray-400 text-sm mt-1 font-mono">{sessionId}</p>
-          </div>
-          <button
-            onClick={onDisconnect}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors cursor-pointer"
-          >
-            Disconnect
-          </button>
-        </div>
-
-        {/* Messages */}
-        {(error || success) && (
-          <div className="fixed top-5 left-0 right-0 z-[10000] px-4 pointer-events-none">
-            <div className="max-w-4xl mx-auto space-y-2">
-              {error && (
-                <div className="pointer-events-auto p-3 bg-red-900/70 border border-red-700 rounded-lg text-red-200 text-sm shadow-lg">
-                  {error}
-                </div>
-              )}
-              {success && (
-                <div className="pointer-events-auto p-3 bg-green-900/70 border border-green-700 rounded-lg text-green-200 text-sm shadow-lg">
-                  {success}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Controls Panel */}
-        <div id="capture-controls" className="bg-gray-800 rounded-lg p-6 mb-6">
-          <h2 className="text-lg font-semibold text-white mb-4">Capture Controls</h2>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-gray-300 text-sm font-medium mb-2">
-                Context
-              </label>
-              <p className="text-xs text-gray-400 mb-2">
-                Context list is fetched only. Selection is applied when you run capture.
-              </p>
-              <div className="flex gap-2">
-                <select
-                  value={selectedContext}
-                  onChange={(e) => handleContextChange(e.target.value)}
-                  className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {contexts.length === 0 ? (
-                    <option value="">No contexts available</option>
-                  ) : (
-                    <>
-                      <option value="">Select a context</option>
-                      {contexts.map((ctx) => (
-                        <option key={ctx} value={ctx}>
-                          {ctx}
-                        </option>
-                      ))}
-                    </>
-                  )}
-                </select>
-                <button
-                  onClick={handleRefreshContexts}
-                  disabled={refreshingContexts}
-                  className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 border border-gray-600 rounded-lg text-white transition-colors cursor-pointer"
-                  title="Refresh contexts"
-                >
-                  <svg
-                    className={`w-5 h-5 ${refreshingContexts ? 'animate-spin' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleSetSelectedContext}
-                  disabled={settingContext || !selectedContext}
-                  className="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-600 border border-blue-600 rounded-lg text-white text-sm transition-colors cursor-pointer"
-                  title="Set selected context"
-                >
-                  {settingContext ? 'Setting...' : 'Set'}
-                </button>
-                <button
-                  onClick={handleGetCurrentContext}
-                  disabled={gettingCurrentContext}
-                  className="px-3 py-2 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 border border-cyan-600 rounded-lg text-white text-sm transition-colors cursor-pointer"
-                  title="Get current context from Appium"
-                >
-                  {gettingCurrentContext ? 'Getting...' : 'Get Current'}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleCapture}
-                disabled={capturing || capturingScreenshot || !selectedContext}
-                className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                {capturing ? 'Capturing...' : 'Capture Source'}
-              </button>
-              <button
-                onClick={handleCaptureScreenshot}
-                disabled={capturing || capturingScreenshot}
-                className="flex-1 py-3 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                {capturingScreenshot ? 'Capturing...' : 'Capture Screenshot'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Captures List and Screenshot Preview */}
-        <div id="captures-preview-section" className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Captures List */}
-          <div id="captures-list" className="bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden max-h-125">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-white">
-                Captures ({captures.length})
-              </h2>
-              {captures.length > 0 && (
-                <button
-                  onClick={handleDeleteAll}
-                  className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors cursor-pointer"
-                >
-                  Delete All
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-2 flex-1 overflow-y-auto">
-              {captures.length === 0 ? (
-                <p className="text-gray-400 text-sm">No captures yet</p>
-              ) : (
-                captures.map((capture) => (
-                  <div
-                    key={capture.name}
-                    className={`group w-full p-3 rounded-xl border transition-all ${
-                      capture.metadata?.hasErrors
-                        ? 'bg-gradient-to-b from-red-900/25 to-gray-800/90 border-red-700/60'
-                        : 'bg-gradient-to-b from-gray-700/90 to-gray-800/90 border-gray-600/70'
-                    }`}
-                  >
-                    <button
-                      onClick={() => setSelectedCapture(capture)}
-                      className="w-full text-left cursor-pointer mb-3"
-                      title="Open capture details"
-                    >
-                      <div className="rounded-lg border border-gray-600/70 bg-gray-900/50 px-3 py-2.5 group-hover:border-gray-500/80 transition-colors">
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <div className="min-w-0">
-                            <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Capture</p>
-                            <p className="text-sm font-semibold text-white break-all">{capture.name}</p>
-                          </div>
-                          <div className="shrink-0 flex items-center gap-1.5">
-                            {capture.metadata?.hasErrors ? (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-red-700/70 bg-red-900/50 text-[10px] font-medium text-red-200">
-                                Error
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-emerald-700/70 bg-emerald-900/40 text-[10px] font-medium text-emerald-200">
-                                OK
-                              </span>
-                            )}
-                            <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            </svg>
-                          </div>
-                        </div>
-
-                        <div className="space-y-1.5">
-                          <p className="text-xs text-gray-300 break-all">
-                            <span className="text-gray-500 mr-1">Context:</span>
-                            <span className="text-gray-100">{capture.metadata?.contextName || 'N/A'}</span>
-                          </p>
-                          <p className="text-xs text-gray-300 break-all">
-                            <span className="text-gray-500 mr-1">Session ID:</span>
-                            <span className="font-mono text-gray-100">{capture.metadata?.sessionId || 'N/A'}</span>
-                          </p>
-                          <p className="text-xs text-gray-300 break-all">
-                            <span className="text-gray-500 mr-1">Date/Time:</span>
-                            <span className="text-gray-100">{formatCaptureDateTime(capture.metadata?.capturedAt || capture.createdAt)}</span>
-                          </p>
-                        </div>
-                        {capture.metadata?.hasErrors && (
-                          <p className="text-[11px] text-red-300 mt-2">Capture has errors. Open details for diagnostics.</p>
-                        )}
-                      </div>
-                    </button>
-
-                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
-                      <button
-                        onClick={() => handlePreview(capture)}
-                        className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 text-white rounded-md transition-colors cursor-pointer"
-                        title="Preview screenshot"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        onClick={() => window.open(api.getViewerUrl(capture.name), '_blank')}
-                        className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white rounded-md transition-colors cursor-pointer"
-                        title="Open in viewer"
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          Open
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3h7m0 0v7m0-7L10 14" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12v7a2 2 0 002 2h7" />
-                          </svg>
-                        </span>
-                      </button>
-                      <button
-                        onClick={() => handleRenameCaptureTile(capture.name)}
-                        className="px-3 py-1.5 text-xs bg-amber-600 hover:bg-amber-500 border border-amber-500 text-white rounded-md transition-colors cursor-pointer"
-                        title="Rename capture"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCaptureTile(capture.name)}
-                        className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 border border-red-500 text-white rounded-md transition-colors cursor-pointer"
-                        title="Delete capture"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Screenshot Preview */}
-          <div id="screenshot-preview" className="bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden max-h-125">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-white">
-                {previewCapture ? `Preview: ${previewCapture.name}` : 'Screenshot'}
-              </h2>
-              <div className="flex items-center gap-2">
-                {!previewCapture && (
-                  <>
-                    <button
-                      onClick={() => {
-                        if (!autoRefreshScreenshot) fetchScreenshot();
-                        setAutoRefreshScreenshot(!autoRefreshScreenshot);
-                      }}
-                      className={`px-3 py-1 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
-                        autoRefreshScreenshot
-                          ? 'bg-green-600 hover:bg-green-700 text-white'
-                          : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-                      }`}
-                      title={autoRefreshScreenshot ? 'Stop auto-refresh' : `Auto-refresh every ${parsedScreenshotRefreshSeconds}s`}
-                    >
-                      <svg className={`w-4 h-4 ${autoRefreshScreenshot ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      Live
-                    </button>
-                    <div className="flex items-center gap-1 bg-gray-700 border border-gray-600 rounded-lg px-2 py-1">
-                      <input
-                        type="number"
-                        min="1"
-                        value={screenshotRefreshSecondsInput}
-                        onChange={(e) => setScreenshotRefreshSecondsInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSetScreenshotRefreshInterval();
-                        }}
-                        className="w-16 bg-transparent text-white text-sm focus:outline-none"
-                        title="Live refresh interval in seconds"
-                      />
-                      <span className="text-gray-300 text-xs">sec</span>
-                      <button
-                        onClick={handleSetScreenshotRefreshInterval}
-                        className="px-2 py-0.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-[11px] transition-colors cursor-pointer"
-                        title="Apply refresh interval"
-                      >
-                        Set
-                      </button>
-                    </div>
-                  </>
-                )}
-                {previewCapture && (
-                  <button
-                    onClick={() => setPreviewCapture(null)}
-                    className="text-gray-400 hover:text-white text-sm cursor-pointer"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="flex-1 flex items-center justify-center bg-gray-900 rounded-lg overflow-hidden min-h-64">
-              {previewCapture ? (
-                <img
-                  src={api.getScreenshotUrl(previewCapture.name)}
-                  alt={`Preview: ${previewCapture.name}`}
-                  className="max-w-full max-h-96 object-contain"
-                />
-              ) : currentScreenshot ? (
-                <img
-                  src={`data:image/png;base64,${currentScreenshot}`}
-                  alt="Current screenshot"
-                  className="max-w-full max-h-96 object-contain"
-                />
-              ) : (
-                <div className="text-gray-500 text-sm text-center p-4">
-                  <svg className="w-12 h-12 mx-auto mb-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  <p>No screenshot captured yet</p>
-                  <p className="text-xs mt-1">Click "Capture Source", "Capture Screenshot", or "Preview" to view</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+    <div className="session-page min-h-screen bg-gray-900 p-4">
+      <div className="session-page-content max-w-7xl mx-auto">
+        <SessionHeader
+          sessionId={sessionId}
+          onDisconnect={onDisconnect}
+          error={error}
+          success={success}
+        />
+        <CaptureControlsSection
+          selectedContext={selectedContext}
+          handleContextChange={handleContextChange}
+          contexts={contexts}
+          handleRefreshContexts={handleRefreshContexts}
+          refreshingContexts={refreshingContexts}
+          handleSetSelectedContext={handleSetSelectedContext}
+          settingContext={settingContext}
+          handleGetCurrentContext={handleGetCurrentContext}
+          gettingCurrentContext={gettingCurrentContext}
+          handleCapture={handleCapture}
+          capturing={capturing}
+          capturingScreenshot={capturingScreenshot}
+          handleCaptureScreenshot={handleCaptureScreenshot}
+        />
+        <CapturesPreviewSection
+          captures={captures}
+          handleDeleteAll={handleDeleteAll}
+          setSelectedCapture={setSelectedCapture}
+          formatCaptureDateTime={formatCaptureDateTime}
+          handlePreview={handlePreview}
+          api={api}
+          handleRenameCaptureTile={handleRenameCaptureTile}
+          handleDeleteCaptureTile={handleDeleteCaptureTile}
+          previewCapture={previewCapture}
+          setPreviewCapture={setPreviewCapture}
+          autoRefreshScreenshot={autoRefreshScreenshot}
+          fetchScreenshot={fetchScreenshot}
+          setAutoRefreshScreenshot={setAutoRefreshScreenshot}
+          parsedScreenshotRefreshSeconds={parsedScreenshotRefreshSeconds}
+          screenshotRefreshSecondsInput={screenshotRefreshSecondsInput}
+          setScreenshotRefreshSecondsInput={setScreenshotRefreshSecondsInput}
+          handleSetScreenshotRefreshInterval={handleSetScreenshotRefreshInterval}
+          currentScreenshot={currentScreenshot}
+          isLiveScreenshotInteractable={isLiveScreenshotInteractable}
+          screenshotLiveImageRef={screenshotLiveImageRef}
+          handleLiveScreenshotPointerDown={handleLiveScreenshotPointerDown}
+          handleLiveScreenshotPointerMove={handleLiveScreenshotPointerMove}
+          handleLiveScreenshotPointerUp={handleLiveScreenshotPointerUp}
+          handleLiveScreenshotPointerCancel={handleLiveScreenshotPointerCancel}
+          screenshotGestureStart={screenshotGestureStart}
+          screenshotGestureCurrent={screenshotGestureCurrent}
+          isRunningScreenshotGesture={isRunningScreenshotGesture}
+          isScreenshotInteractExpanded={isScreenshotInteractExpanded}
+          setIsScreenshotInteractExpanded={setIsScreenshotInteractExpanded}
+          lastScreenshotPressCoordinates={lastScreenshotPressCoordinates}
+          showScreenshotSendKeysInput={showScreenshotSendKeysInput}
+          setShowScreenshotSendKeysInput={setShowScreenshotSendKeysInput}
+          screenshotSendKeysText={screenshotSendKeysText}
+          setScreenshotSendKeysText={setScreenshotSendKeysText}
+          sendingScreenshotKeys={sendingScreenshotKeys}
+          handleSendScreenshotKeys={handleSendScreenshotKeys}
+        />
 
         {/* Element Finder and Saved Elements */} 
-        <div id="elements-sections" className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          <div id="find-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
+        <div id="elements-sections" className="session-elements-sections grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <div id="find-elements-section" className="session-find-elements-section bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
             <h2 className="text-lg font-semibold text-white mb-2">Find Elements</h2>
             <p className="text-gray-400 text-xs mb-4">
               Find elements using WebDriver APIs and save a named element when exactly one match is returned.
@@ -2645,7 +2628,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             </div>
           </div>
 
-          <div id="saved-elements-section" className="bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
+          <div id="saved-elements-section" className="session-saved-elements-section bg-gray-800 rounded-lg p-6 max-h-[900px] overflow-y-auto">
             <h2 className="text-lg font-semibold text-white mb-2">Saved Elements</h2>
             <p className="text-gray-400 text-xs mb-4">
               Save named element references, re-check existence, and run tap/click/keys actions.
@@ -3164,499 +3147,56 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
           </div>
         </div>
 
-        {/* Advanced Sections */}
-        <div id="advanced-sections" className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          {/* Execute Script Section */}
-          <div id="execute-script-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
-            <h2 className="text-lg font-semibold text-white mb-4">Execute Script</h2>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-gray-300 text-sm font-medium mb-2">
-                  Endpoint
-                </label>
-                <select
-                  value={executeScriptEndpoint}
-                  onChange={(e) => setExecuteScriptEndpoint(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
-                >
-                  <option value="/session/{session id}/execute/sync">POST /session/{'{session id}'}/execute/sync</option>
-                  <option value="/session/{session id}/execute">POST /session/{'{session id}'}/execute</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-gray-300 text-sm font-medium mb-2">
-                  Mode
-                </label>
-                <select
-                  value={executeScriptMode}
-                  onChange={(e) => setExecuteScriptMode(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="scriptOnly">Script only</option>
-                  <option value="scriptWithArgs">Script + args (JSON)</option>
-                </select>
-              </div>
-
-              {executeScriptMode === 'scriptOnly' ? (
-                <div>
-                  <label className="block text-gray-300 text-sm font-medium mb-2">
-                    Script
-                  </label>
-                  <textarea
-                    value={executeScript}
-                    onChange={(e) => setExecuteScript(e.target.value)}
-                    placeholder="mobile: deviceScreenInfo"
-                    rows={4}
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm resize-none"
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-gray-300 text-sm font-medium mb-2">
-                    Script + Args Payload (JSON)
-                  </label>
-                  <textarea
-                    value={executeScriptWithArgsJson}
-                    onChange={(e) => setExecuteScriptWithArgsJson(e.target.value)}
-                    rows={6}
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm resize-none"
-                  />
-                </div>
-              )}
-
-              <button
-                onClick={handleExecuteScript}
-                disabled={executingScript || !canSendExecuteScript}
-                className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                {executingScript ? 'Executing...' : 'Send'}
-              </button>
-
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <label className="text-gray-300 text-sm font-medium">
-                    Response
-                  </label>
-                  {executeScriptStatus !== null && (
-                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                      isSuccessStatusCode(executeScriptStatus)
-                        ? 'bg-green-900/50 text-green-400'
-                        : 'bg-red-900/50 text-red-400'
-                    }`}>
-                      {executeScriptStatus}
-                    </span>
-                  )}
-                </div>
-                <textarea
-                  value={executeScriptResult}
-                  readOnly
-                  rows={6}
-                  placeholder="Response will appear here..."
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-gray-300 placeholder-gray-500 font-mono text-sm resize-none"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-gray-300 text-sm font-medium">
-                    Executed Scripts (last {REQUEST_HISTORY_LIMIT}) - {executedScripts.length}
-                  </label>
-                  <button
-                    onClick={handleExportExecutedScripts}
-                    disabled={executedScripts.length === 0}
-                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
-                    title="Export execute script history"
-                  >
-                    Export JSON
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-56 overflow-y-auto">
-                  {executedScripts.length === 0 ? (
-                    <p className="text-gray-500 text-sm">No scripts executed yet</p>
-                  ) : (
-                    executedScripts.map((item) => (
-                      <div key={item.id} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
-                        <button
-                          onClick={() => setExpandedExecutedScriptId((prev) => (prev === item.id ? null : item.id))}
-                          className="w-full px-3 py-2 hover:bg-gray-800/70 text-left cursor-pointer"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <svg
-                                className={`w-3 h-3 text-gray-400 transition-transform ${expandedExecutedScriptId === item.id ? 'rotate-90' : ''}`}
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                              </svg>
-                              <span className="font-mono text-xs px-2 py-0.5 rounded bg-blue-900/50 text-blue-300 shrink-0">
-                                {item.method}
-                              </span>
-                              <span className="text-cyan-300 text-[11px] font-mono truncate">{item.endpoint}</span>
-                            </div>
-                            <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
-                              isSuccessStatusCode(item.statusCode)
-                                ? 'bg-green-900/50 text-green-400'
-                                : item.statusCode === null
-                                  ? 'bg-gray-700 text-gray-400'
-                                  : 'bg-red-900/50 text-red-400'
-                            }`}>
-                              {item.statusCode ?? '-'}
-                            </span>
-                          </div>
-                          <p className="text-gray-500 text-[10px] mt-1 ml-5">
-                            {new Date(item.executedAt).toLocaleString()}
-                          </p>
-                        </button>
-                        {expandedExecutedScriptId === item.id && (
-                          <div className="border-t border-gray-700 px-3 py-3 space-y-3">
-                            <div>
-                              <div className="flex items-center justify-between mb-1">
-                                <p className="text-gray-400 text-xs">Payload</p>
-                                <button
-                                  onClick={() => handleCopyScript(item.payloadText || '')}
-                                  disabled={!item.payloadText}
-                                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
-                                  title="Copy payload"
-                                >
-                                  Copy
-                                </button>
-                              </div>
-                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-                                {item.payloadText || '(empty)'}
-                              </pre>
-                            </div>
-                            <div>
-                              <p className="text-gray-400 text-xs mb-1">Response</p>
-                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-                                {item.responseText || '(empty)'}
-                              </pre>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-        {/* Generic API Section */}
-        <div id="generic-api-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Generic WebDriver API</h2>
-                <p className="text-gray-400 text-xs mt-1">Send any WebDriver command</p>
-              </div>
-              <div className="w-80 shrink-0">
-                <label className="block text-gray-300 text-xs font-medium mb-1">
-                  WebDriver API Preset
-                </label>
-                <select
-                  value={selectedWebDriverPresetTitle}
-                  onChange={(e) => handleSelectWebDriverPreset(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="none">none</option>
-                  {WEBDRIVER_REFERENCE_PRESETS.map((preset) => (
-                    <option key={preset.title} value={preset.title}>
-                      {preset.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-gray-300 text-sm font-medium mb-2">
-                  Endpoint
-                </label>
-                <div className="flex w-full border border-gray-600 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="px-3 py-2 bg-gray-900 text-gray-400 font-mono text-xs whitespace-nowrap border-r border-gray-600">
-                    {GENERIC_SESSION_ENDPOINT_PREFIX}
-                  </span>
-                  <input
-                    type="text"
-                    value={genericEndpoint}
-                    onChange={(e) => setGenericEndpoint(trimLeadingSlashes(e.target.value))}
-                    placeholder="url (or status for absolute preset)"
-                    className="flex-1 px-3 py-2 bg-gray-700 text-white placeholder-gray-400 focus:outline-none font-mono text-sm min-w-0"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-gray-300 text-sm font-medium mb-2">
-                  Method
-                </label>
-                <select
-                  value={genericMethod}
-                  onChange={(e) => setGenericMethod(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="GET">GET</option>
-                  <option value="POST">POST</option>
-                  <option value="DELETE">DELETE</option>
-                </select>
-              </div>
-
-              {genericMethod === 'POST' && (
-                <div>
-                  <label className="block text-gray-300 text-sm font-medium mb-2">
-                    Payload (JSON)
-                  </label>
-                  <textarea
-                    value={genericPayload}
-                    onChange={(e) => setGenericPayload(e.target.value)}
-                    placeholder='{"key": "value"}'
-                    rows={3}
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm resize-none"
-                  />
-                </div>
-              )}
-
-              <button
-                onClick={handleGenericRequest}
-                disabled={sendingGeneric || !genericEndpoint.trim()}
-                className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                {sendingGeneric ? 'Sending...' : 'Send'}
-              </button>
-
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <label className="text-gray-300 text-sm font-medium">
-                    Response
-                  </label>
-                  {genericStatus !== null && (
-                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                      isSuccessStatusCode(genericStatus)
-                        ? 'bg-green-900/50 text-green-400'
-                        : 'bg-red-900/50 text-red-400'
-                    }`}>
-                      {genericStatus}
-                    </span>
-                  )}
-                </div>
-                <textarea
-                  value={genericResult}
-                  readOnly
-                  rows={6}
-                  placeholder="Response will appear here..."
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-gray-300 placeholder-gray-500 font-mono text-sm resize-none"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-gray-300 text-sm font-medium">
-                    Executed WebDriver APIs (last {REQUEST_HISTORY_LIMIT}) - {executedGenericApis.length}
-                  </label>
-                  <button
-                    onClick={handleExportExecutedGenericApis}
-                    disabled={executedGenericApis.length === 0}
-                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-[11px] cursor-pointer"
-                    title="Export generic API history"
-                  >
-                    Export JSON
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-56 overflow-y-auto">
-                  {executedGenericApis.length === 0 ? (
-                    <p className="text-gray-500 text-sm">No APIs executed yet</p>
-                  ) : (
-                    executedGenericApis.map((item) => (
-                      <div key={item.id} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
-                        <button
-                          onClick={() => setExpandedExecutedGenericId((prev) => (prev === item.id ? null : item.id))}
-                          className="w-full px-3 py-2 hover:bg-gray-800/70 text-left cursor-pointer"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <svg
-                                className={`w-3 h-3 text-gray-400 transition-transform ${expandedExecutedGenericId === item.id ? 'rotate-90' : ''}`}
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                              </svg>
-                              <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
-                                item.method === 'GET' ? 'bg-green-900/50 text-green-400' :
-                                item.method === 'POST' ? 'bg-blue-900/50 text-blue-400' :
-                                item.method === 'DELETE' ? 'bg-red-900/50 text-red-400' :
-                                'bg-gray-700 text-gray-300'
-                              }`}>
-                                {item.method}
-                              </span>
-                              <span className="text-cyan-300 text-[11px] font-mono truncate">{item.endpoint}</span>
-                            </div>
-                            <span className={`font-mono text-xs px-2 py-0.5 rounded shrink-0 ${
-                              isSuccessStatusCode(item.statusCode)
-                                ? 'bg-green-900/50 text-green-400'
-                                : item.statusCode === null
-                                  ? 'bg-gray-700 text-gray-400'
-                                  : 'bg-red-900/50 text-red-400'
-                            }`}>
-                              {item.statusCode ?? '-'}
-                            </span>
-                          </div>
-                          <p className="text-gray-500 text-[10px] mt-1 ml-5">
-                            {new Date(item.executedAt).toLocaleString()}
-                          </p>
-                        </button>
-                        {expandedExecutedGenericId === item.id && (
-                          <div className="border-t border-gray-700 px-3 py-3 space-y-3">
-                            <div>
-                              <p className="text-gray-400 text-xs mb-1">Payload</p>
-                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-                                {item.payloadText || '(empty)'}
-                              </pre>
-                            </div>
-                            <div>
-                              <p className="text-gray-400 text-xs mb-1">Response</p>
-                              <pre className="bg-gray-950 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-                                {item.responseText || '(empty)'}
-                              </pre>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* API Logs Section */}
-        <div id="api-logs-section" className="bg-gray-800 rounded-lg p-6 mt-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">
-              WebDriver API Logs ({logs.length})
-            </h2>
-            <div className="flex gap-2">
-              <button
-                onClick={loadLogs}
-                disabled={logsLoading}
-                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 text-white rounded-lg transition-colors cursor-pointer"
-                title="Refresh logs"
-              >
-                {logsLoading ? 'Loading...' : 'Refresh'}
-              </button>
-              <button
-                onClick={handleClearLogs}
-                disabled={logs.length === 0}
-                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
-                title="Clear logs from view"
-              >
-                Clear
-              </button>
-              <button
-                onClick={handleDeleteAllLogs}
-                disabled={logs.length === 0}
-                className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
-                title="Delete all log files from server"
-              >
-                Delete All
-              </button>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            {logs.length === 0 ? (
-              <p className="text-gray-400 text-sm">No logs available</p>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700">
-                    <th className="text-left text-gray-400 font-medium py-2 px-2">Timestamp</th>
-                    <th className="text-left text-gray-400 font-medium py-2 px-2">Method</th>
-                    <th className="text-left text-gray-400 font-medium py-2 px-2">URL</th>
-                    <th className="text-left text-gray-400 font-medium py-2 px-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log, index) => {
-                    const hasError = log.error || log.errorResponse;
-                    const isExpanded = expandedLogIndex === index;
-                    return (
-                      <React.Fragment key={index}>
-                        <tr
-                          className={`border-b border-gray-700/50 hover:bg-gray-700/30 ${hasError ? 'cursor-pointer' : ''}`}
-                          onClick={() => hasError && setExpandedLogIndex(isExpanded ? null : index)}
-                        >
-                          <td className="py-2 px-2 text-gray-300 font-mono text-xs whitespace-nowrap">
-                            <div className="flex items-center gap-1">
-                              {hasError && (
-                                <svg className={`w-3 h-3 text-red-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                              )}
-                              {log.timestamp}
-                            </div>
-                          </td>
-                          <td className="py-2 px-2">
-                            <span className={`font-mono text-xs px-2 py-0.5 rounded ${
-                              log.method === 'GET' ? 'bg-green-900/50 text-green-400' :
-                              log.method === 'POST' ? 'bg-blue-900/50 text-blue-400' :
-                              log.method === 'DELETE' ? 'bg-red-900/50 text-red-400' :
-                              'bg-gray-700 text-gray-300'
-                            }`}>
-                              {log.method}
-                            </span>
-                          </td>
-                          <td className="py-2 px-2 text-gray-300 font-mono text-xs max-w-md truncate" title={log.url}>
-                            {log.url}
-                          </td>
-                          <td className="py-2 px-2">
-                            <span className={`font-mono text-xs ${
-                              log.status >= 200 && log.status < 300 ? 'text-green-400' :
-                              log.status >= 400 ? 'text-red-400' :
-                              'text-yellow-400'
-                            }`}>
-                              {log.status}
-                            </span>
-                          </td>
-                        </tr>
-                        {isExpanded && hasError && (
-                          <tr className="bg-red-900/20">
-                            <td colSpan={4} className="py-3 px-4">
-                              <div className="space-y-2">
-                                {log.error && (
-                                  <div>
-                                    <span className="text-red-400 text-xs font-medium">Error: </span>
-                                    <span className="text-gray-300 text-xs font-mono">{log.error}</span>
-                                  </div>
-                                )}
-                                {log.errorResponse && (
-                                  <div>
-                                    <span className="text-red-400 text-xs font-medium">Response: </span>
-                                    <pre className="mt-1 text-gray-300 text-xs font-mono bg-gray-900 p-2 rounded overflow-x-auto max-h-40 overflow-y-auto">
-                                      {typeof log.errorResponse === 'string'
-                                        ? log.errorResponse
-                                        : JSON.stringify(log.errorResponse, null, 2)}
-                                    </pre>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+        <AdvancedSections
+          executeScriptEndpoint={executeScriptEndpoint}
+          setExecuteScriptEndpoint={setExecuteScriptEndpoint}
+          executeScriptMode={executeScriptMode}
+          setExecuteScriptMode={setExecuteScriptMode}
+          executeScript={executeScript}
+          setExecuteScript={setExecuteScript}
+          executeScriptWithArgsJson={executeScriptWithArgsJson}
+          setExecuteScriptWithArgsJson={setExecuteScriptWithArgsJson}
+          handleExecuteScript={handleExecuteScript}
+          executingScript={executingScript}
+          canSendExecuteScript={canSendExecuteScript}
+          executeScriptStatus={executeScriptStatus}
+          isSuccessStatusCode={isSuccessStatusCode}
+          executeScriptResult={executeScriptResult}
+          REQUEST_HISTORY_LIMIT={REQUEST_HISTORY_LIMIT}
+          executedScripts={executedScripts}
+          handleExportExecutedScripts={handleExportExecutedScripts}
+          setExpandedExecutedScriptId={setExpandedExecutedScriptId}
+          expandedExecutedScriptId={expandedExecutedScriptId}
+          handleCopyScript={handleCopyScript}
+          selectedWebDriverPresetTitle={selectedWebDriverPresetTitle}
+          handleSelectWebDriverPreset={handleSelectWebDriverPreset}
+          WEBDRIVER_REFERENCE_PRESETS={WEBDRIVER_REFERENCE_PRESETS}
+          GENERIC_SESSION_ENDPOINT_PREFIX={GENERIC_SESSION_ENDPOINT_PREFIX}
+          genericEndpoint={genericEndpoint}
+          setGenericEndpoint={setGenericEndpoint}
+          trimLeadingSlashes={trimLeadingSlashes}
+          genericMethod={genericMethod}
+          setGenericMethod={setGenericMethod}
+          genericPayload={genericPayload}
+          setGenericPayload={setGenericPayload}
+          handleGenericRequest={handleGenericRequest}
+          sendingGeneric={sendingGeneric}
+          genericStatus={genericStatus}
+          genericResult={genericResult}
+          executedGenericApis={executedGenericApis}
+          handleExportExecutedGenericApis={handleExportExecutedGenericApis}
+          setExpandedExecutedGenericId={setExpandedExecutedGenericId}
+          expandedExecutedGenericId={expandedExecutedGenericId}
+        />
+        <ApiLogsSection
+          logs={logs}
+          loadLogs={loadLogs}
+          logsLoading={logsLoading}
+          handleClearLogs={handleClearLogs}
+          handleDeleteAllLogs={handleDeleteAllLogs}
+          expandedLogIndex={expandedLogIndex}
+          setExpandedLogIndex={setExpandedLogIndex}
+        />
 
         {/* Capture Viewer Modal */}
         {selectedCapture && (
