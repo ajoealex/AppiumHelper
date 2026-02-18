@@ -128,6 +128,17 @@ export const api = {
     );
   },
 
+  async getWindowRect(appiumUrl, sessionId, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      '/session/{session id}/window/rect',
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
   async executeScript(appiumUrl, sessionId, script, args = [], customHeaders = {}) {
     const response = await fetch(`${API_BASE}/session/${sessionId}/execute`, {
       method: 'POST',

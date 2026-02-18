@@ -42,7 +42,12 @@ export default function CapturesPreviewSection({
 
   return (
     <div id="captures-preview-section" className="session-captures-preview-grid grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div id="captures-list" className="session-captures-list-panel bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden max-h-125">
+      <div
+        id="captures-list"
+        className={`session-captures-list-panel bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden transition-[height] duration-200 ${
+          isScreenshotInteractExpanded ? 'lg:h-[calc(100vh-120px)]' : 'lg:h-[700px]'
+        }`}
+      >
         <div className="session-captures-list-header flex items-start justify-between mb-4">
           <h2 className="session-captures-list-title text-lg font-semibold text-white">
             Captures ({captures.length})

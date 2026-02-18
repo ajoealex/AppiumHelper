@@ -349,17 +349,29 @@ function clampNumber(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function mapPointerToDeviceCoordinates(pointerEvent, imageElement) {
+function mapPointerToDeviceCoordinates(pointerEvent, imageElement, viewportSize = null) {
   if (!pointerEvent || !imageElement) return null;
   const rect = imageElement.getBoundingClientRect();
-  if (!rect.width || !rect.height || !imageElement.naturalWidth || !imageElement.naturalHeight) {
+  if (!rect.width || !rect.height) {
     return null;
   }
 
+  const viewportWidth = Number(viewportSize?.width);
+  const viewportHeight = Number(viewportSize?.height);
+  const targetWidth = Number.isFinite(viewportWidth) && viewportWidth > 0
+    ? Math.round(viewportWidth)
+    : imageElement.naturalWidth;
+  const targetHeight = Number.isFinite(viewportHeight) && viewportHeight > 0
+    ? Math.round(viewportHeight)
+    : imageElement.naturalHeight;
+  if (!targetWidth || !targetHeight) return null;
+
   const relativeX = clampNumber(pointerEvent.clientX - rect.left, 0, rect.width);
   const relativeY = clampNumber(pointerEvent.clientY - rect.top, 0, rect.height);
-  const x = Math.round((relativeX / rect.width) * imageElement.naturalWidth);
-  const y = Math.round((relativeY / rect.height) * imageElement.naturalHeight);
+  const maxX = Math.max(targetWidth - 1, 0);
+  const maxY = Math.max(targetHeight - 1, 0);
+  const x = Math.round((relativeX / rect.width) * maxX);
+  const y = Math.round((relativeY / rect.height) * maxY);
   return { x, y };
 }
 
@@ -388,11 +400,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [screenshotRefreshSecondsInput, setScreenshotRefreshSecondsInput] = useState('10');
   const [isScreenshotInteractExpanded, setIsScreenshotInteractExpanded] = useState(false);
   const [lastScreenshotPressCoordinates, setLastScreenshotPressCoordinates] = useState(null);
+  const [deviceWindowRect, setDeviceWindowRect] = useState(null);
   const [showScreenshotSendKeysInput, setShowScreenshotSendKeysInput] = useState(false);
   const [screenshotSendKeysText, setScreenshotSendKeysText] = useState('');
   const [sendingScreenshotKeys, setSendingScreenshotKeys] = useState(false);
   const screenshotLiveImageRef = useRef(null);
   const screenshotGestureRef = useRef(null);
+  const wasScreenshotInteractModeEnabledRef = useRef(false);
   const [screenshotGestureStart, setScreenshotGestureStart] = useState(null);
   const [screenshotGestureCurrent, setScreenshotGestureCurrent] = useState(null);
 
@@ -510,6 +524,11 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     && autoRefreshScreenshot
     && isScreenshotInteractExpanded
   );
+  const isScreenshotInteractModeEnabled = (
+    !previewCapture
+    && autoRefreshScreenshot
+    && isScreenshotInteractExpanded
+  );
   const isRunningScreenshotGesture = runningElementAction === 'screenshot:gesture';
 
   const focusSavedElementTile = useCallback((elementId) => {
@@ -574,6 +593,32 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       setSelectedContext((prev) => (contextList.includes(prev) ? prev : ''));
     } catch (err) {
       setError('Failed to load contexts: ' + err.message);
+    }
+  }, [appiumUrl, sessionId, customHeaders]);
+
+  const fetchDeviceWindowRect = useCallback(async ({ silent = false } = {}) => {
+    try {
+      const rectResponse = await api.getWindowRect(appiumUrl, sessionId, customHeaders);
+      const rectValue = rectResponse?.value || {};
+      const width = Number(rectValue.width);
+      const height = Number(rectValue.height);
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        throw new Error('Invalid viewport size returned from /window/rect');
+      }
+      const nextRect = {
+        x: Number.isFinite(Number(rectValue.x)) ? Number(rectValue.x) : 0,
+        y: Number.isFinite(Number(rectValue.y)) ? Number(rectValue.y) : 0,
+        width: Math.round(width),
+        height: Math.round(height),
+        fetchedAt: Date.now()
+      };
+      setDeviceWindowRect(nextRect);
+      return nextRect;
+    } catch (err) {
+      if (!silent) {
+        setError('Failed to get device window rect: ' + err.message);
+      }
+      return null;
     }
   }, [appiumUrl, sessionId, customHeaders]);
 
@@ -642,6 +687,18 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     setScreenshotGestureStart(null);
     setScreenshotGestureCurrent(null);
   }, [isLiveScreenshotInteractable]);
+
+  useEffect(() => {
+    setDeviceWindowRect(null);
+    wasScreenshotInteractModeEnabledRef.current = false;
+  }, [appiumUrl, sessionId]);
+
+  useEffect(() => {
+    if (isScreenshotInteractModeEnabled && !wasScreenshotInteractModeEnabledRef.current) {
+      void fetchDeviceWindowRect({ silent: true });
+    }
+    wasScreenshotInteractModeEnabledRef.current = isScreenshotInteractModeEnabled;
+  }, [isScreenshotInteractModeEnabled, fetchDeviceWindowRect]);
 
   // Auto-dismiss messages after 5 seconds
   useEffect(() => {
@@ -1108,9 +1165,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const handleLiveScreenshotPointerDown = (event) => {
     if (!isLiveScreenshotInteractable || isRunningScreenshotGesture) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (!deviceWindowRect?.width || !deviceWindowRect?.height) {
+      void fetchDeviceWindowRect({ silent: false });
+      return;
+    }
 
     const imageElement = screenshotLiveImageRef.current;
-    const mapped = mapPointerToDeviceCoordinates(event, imageElement);
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, deviceWindowRect);
     if (!mapped) return;
 
     screenshotGestureRef.current = {
@@ -1118,7 +1179,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       startX: mapped.x,
       startY: mapped.y,
       currentX: mapped.x,
-      currentY: mapped.y
+      currentY: mapped.y,
+      viewportWidth: deviceWindowRect.width,
+      viewportHeight: deviceWindowRect.height
     };
     setLastScreenshotPressCoordinates({ x: mapped.x, y: mapped.y });
     setScreenshotGestureStart({ x: mapped.x, y: mapped.y });
@@ -1139,7 +1202,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     if (!gesture || gesture.pointerId !== event.pointerId) return;
 
     const imageElement = screenshotLiveImageRef.current;
-    const mapped = mapPointerToDeviceCoordinates(event, imageElement);
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, {
+      width: gesture.viewportWidth,
+      height: gesture.viewportHeight
+    });
     if (!mapped) return;
 
     gesture.currentX = mapped.x;
@@ -1153,7 +1219,10 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     if (!gesture || gesture.pointerId !== event.pointerId) return;
 
     const imageElement = screenshotLiveImageRef.current;
-    const mapped = mapPointerToDeviceCoordinates(event, imageElement);
+    const mapped = mapPointerToDeviceCoordinates(event, imageElement, {
+      width: gesture.viewportWidth,
+      height: gesture.viewportHeight
+    });
     const endX = mapped?.x ?? gesture.currentX;
     const endY = mapped?.y ?? gesture.currentY;
     const startX = gesture.startX;
