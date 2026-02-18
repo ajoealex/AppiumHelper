@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import CaptureViewer from '../components/CaptureViewer';
 
@@ -18,6 +19,21 @@ const FIND_STRATEGIES = [
   { label: 'Data matcher', value: '-android datamatcher', platform: 'Android' },
   { label: 'Predicate string', value: '-ios predicate string', platform: 'iOS' },
   { label: 'Class chain', value: '-ios class chain', platform: 'iOS' }
+];
+const DEFAULT_XPATH_SELECTOR = "(//*[@*='Open WebView'])[1]";
+const ELEMENT_PROPERTY_ENDPOINT_OPTIONS = [
+  {
+    value: 'property',
+    label: 'Property (Web)',
+    endpoint: '/session/{sessionId}/element/{elementId}/property/{name}',
+    requiresName: true
+  },
+  {
+    value: 'attribute',
+    label: 'Attribute (Mobile App)',
+    endpoint: '/session/{sessionId}/element/{elementId}/attribute/{name}',
+    requiresName: true
+  }
 ];
 const EXECUTE_SCRIPT_PAYLOAD_EXAMPLE = `{
   "script": "mobile: alert",
@@ -119,6 +135,91 @@ function normalizeRect(value) {
   return { x, y, width, height };
 }
 
+function getElementPropertySourceLabel(source) {
+  switch (source) {
+    case 'attribute':
+      return 'Attribute';
+    case 'property':
+    default:
+      return 'Property';
+  }
+}
+
+function normalizePropertySource(value) {
+  return value === 'attribute' ? 'attribute' : 'property';
+}
+
+function normalizePropertyEntries(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      if (!name) return null;
+      return {
+        source: normalizePropertySource(item.source),
+        name,
+        value: item.value
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeCssEntries(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      if (!name) return null;
+      return { name, value: item.value };
+    })
+    .filter(Boolean);
+}
+
+function upsertLatestUnique(items, nextItem, getKey) {
+  const nextKey = getKey(nextItem);
+  const filtered = items.filter((item) => getKey(item) !== nextKey);
+  return [nextItem, ...filtered];
+}
+
+function getPropertyEntryKey(entry) {
+  return `${normalizePropertySource(entry?.source)}:${String(entry?.name ?? '').trim().toLowerCase()}`;
+}
+
+function getCssEntryKey(entry) {
+  return String(entry?.name ?? '').trim().toLowerCase();
+}
+
+function buildElementPropertyEndpointPreview(template, sessionId, elementId, name) {
+  return template
+    .replace('{sessionId}', sessionId || '{sessionId}')
+    .replace('{elementId}', elementId || '{elementId}')
+    .replace('{name}', name || '{name}');
+}
+
+function formatElementValueForDisplay(value) {
+  if (typeof value === 'string') return value.length ? value : '(empty)';
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function toCssClassToken(value) {
+  const normalized = String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'unknown';
+}
+
 function formatErrorForTextarea(err) {
   if (err?.responsePayload !== undefined) {
     if (typeof err.responsePayload === 'string') {
@@ -139,6 +240,11 @@ function normalizeCaptureName(value) {
   return (value || '').trim().toLowerCase();
 }
 
+function renderModalInViewport(content) {
+  if (typeof document === 'undefined') return null;
+  return createPortal(content, document.body);
+}
+
 export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDisconnect }) {
   const [contexts, setContexts] = useState([]);
   const [selectedContext, setSelectedContext] = useState('');
@@ -156,18 +262,21 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [previewCapture, setPreviewCapture] = useState(null);
   const [autoRefreshScreenshot, setAutoRefreshScreenshot] = useState(false);
   const [screenshotRefreshSeconds, setScreenshotRefreshSeconds] = useState(10);
+  const [screenshotRefreshSecondsInput, setScreenshotRefreshSecondsInput] = useState('10');
 
   // Element finder state
   const [findScope, setFindScope] = useState('screen');
   const [findUsing, setFindUsing] = useState('xpath');
   const [showStrategyModal, setShowStrategyModal] = useState(false);
-  const [findSelector, setFindSelector] = useState('//button');
+  const [findSelector, setFindSelector] = useState(DEFAULT_XPATH_SELECTOR);
   const [findParentName, setFindParentName] = useState('');
   const [findingElements, setFindingElements] = useState(false);
   const [lastFindCount, setLastFindCount] = useState(0);
   const [lastFindResponse, setLastFindResponse] = useState('');
   const [pendingElementId, setPendingElementId] = useState('');
   const [pendingElementName, setPendingElementName] = useState('');
+  const [pendingElementLocatorUsing, setPendingElementLocatorUsing] = useState('');
+  const [pendingElementLocatorValue, setPendingElementLocatorValue] = useState('');
   const [savedElements, setSavedElements] = useState([]);
   const [savedElementsLoaded, setSavedElementsLoaded] = useState(false);
   const [manualElementName, setManualElementName] = useState('');
@@ -175,6 +284,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [coordX, setCoordX] = useState('');
   const [coordY, setCoordY] = useState('');
   const [runningElementAction, setRunningElementAction] = useState('');
+  const [expandedSavedElementId, setExpandedSavedElementId] = useState(null);
+  const [showElementPropertyModal, setShowElementPropertyModal] = useState(false);
+  const [elementPropertyTarget, setElementPropertyTarget] = useState(null);
+  const [elementPropertyEndpointType, setElementPropertyEndpointType] = useState('property');
+  const [elementPropertyName, setElementPropertyName] = useState('');
+  const [elementPropertyResponse, setElementPropertyResponse] = useState('');
+  const [fetchingElementProperty, setFetchingElementProperty] = useState(false);
   const [showElementKeysModal, setShowElementKeysModal] = useState(false);
   const [elementKeysTarget, setElementKeysTarget] = useState(null);
   const [elementKeysText, setElementKeysText] = useState('');
@@ -184,6 +300,11 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [focusedKeysText, setFocusedKeysText] = useState('');
   const [focusedKeysPayloadMode, setFocusedKeysPayloadMode] = useState('w3c');
   const [sendingFocusedKeys, setSendingFocusedKeys] = useState(false);
+  const [blinkingSavedElementId, setBlinkingSavedElementId] = useState('');
+  const [savedElementBlinkOn, setSavedElementBlinkOn] = useState(false);
+  const savedElementTileRefs = useRef(new Map());
+  const savedElementBlinkTimeoutRef = useRef(null);
+  const savedElementBlinkIntervalRef = useRef(null);
 
   // Execute Script state
   const [executeScript, setExecuteScript] = useState('mobile: deviceScreenInfo');
@@ -222,6 +343,82 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const canSendExecuteScript = executeScriptMode === 'scriptOnly'
     ? Boolean(executeScript.trim())
     : Boolean(executeScriptWithArgsJson.trim());
+  const selectedElementPropertyEndpoint =
+    ELEMENT_PROPERTY_ENDPOINT_OPTIONS.find((option) => option.value === elementPropertyEndpointType) ||
+    ELEMENT_PROPERTY_ENDPOINT_OPTIONS[0];
+  const modalOverlayStyle = {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 9999
+  };
+  const modalCardViewportStyle = {
+    position: 'fixed',
+    top: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)'
+  };
+  const elementPropertyNameTrimmed = elementPropertyName.trim();
+  const elementPropertyEndpointRequiresName = selectedElementPropertyEndpoint.requiresName;
+  const elementPropertyEndpointPreview = buildElementPropertyEndpointPreview(
+    selectedElementPropertyEndpoint.endpoint,
+    sessionId,
+    elementPropertyTarget?.id,
+    elementPropertyNameTrimmed
+  );
+
+  const focusSavedElementTile = useCallback((elementId) => {
+    if (!elementId) return;
+    const tile = savedElementTileRefs.current.get(elementId);
+    if (!tile) return;
+
+    tile.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    setBlinkingSavedElementId(elementId);
+    setSavedElementBlinkOn(true);
+
+    if (savedElementBlinkTimeoutRef.current) {
+      clearTimeout(savedElementBlinkTimeoutRef.current);
+    }
+    if (savedElementBlinkIntervalRef.current) {
+      clearInterval(savedElementBlinkIntervalRef.current);
+    }
+    savedElementBlinkIntervalRef.current = setInterval(() => {
+      setSavedElementBlinkOn((prev) => !prev);
+    }, 220);
+    savedElementBlinkTimeoutRef.current = setTimeout(() => {
+      setBlinkingSavedElementId((current) => (current === elementId ? '' : current));
+      setSavedElementBlinkOn(false);
+      if (savedElementBlinkIntervalRef.current) {
+        clearInterval(savedElementBlinkIntervalRef.current);
+        savedElementBlinkIntervalRef.current = null;
+      }
+      savedElementBlinkTimeoutRef.current = null;
+    }, 5000);
+  }, []);
+
+  const scrollSavedElementTileIntoView = useCallback((elementId) => {
+    if (!elementId) return;
+
+    let attempts = 0;
+    const maxAttempts = 20;
+    const tryScroll = () => {
+      const tile = savedElementTileRefs.current.get(elementId);
+      if (tile) {
+        tile.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        return;
+      }
+
+      attempts += 1;
+      if (attempts < maxAttempts && typeof window !== 'undefined') {
+        window.requestAnimationFrame(tryScroll);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(tryScroll);
+      return;
+    }
+    tryScroll();
+  }, []);
 
   const loadContexts = useCallback(async () => {
     try {
@@ -259,6 +456,17 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     setLoading(true);
     Promise.all([loadContexts(), loadCaptures(), loadLogs()]).finally(() => setLoading(false));
   }, [loadContexts, loadCaptures, loadLogs]);
+
+  useEffect(() => () => {
+    if (savedElementBlinkTimeoutRef.current) {
+      clearTimeout(savedElementBlinkTimeoutRef.current);
+      savedElementBlinkTimeoutRef.current = null;
+    }
+    if (savedElementBlinkIntervalRef.current) {
+      clearInterval(savedElementBlinkIntervalRef.current);
+      savedElementBlinkIntervalRef.current = null;
+    }
+  }, []);
 
   // Auto-refresh logs every 5 seconds
   useEffect(() => {
@@ -414,8 +622,92 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
           setSavedElements(
             valid.map((item) => ({
               ...item,
+              idRefreshed: item.idRefreshed === true,
+              locatorUsing: (() => {
+                if (typeof item.locatorUsing === 'string') return item.locatorUsing.trim();
+                const legacyXpath = typeof item.locatorXPath === 'string'
+                  ? item.locatorXPath.trim()
+                  : typeof item.xpath === 'string'
+                    ? item.xpath.trim()
+                    : '';
+                return legacyXpath ? 'xpath' : '';
+              })(),
+              locatorValue: (() => {
+                if (typeof item.locatorValue === 'string') return item.locatorValue.trim();
+                if (typeof item.locatorXPath === 'string') return item.locatorXPath.trim();
+                if (typeof item.xpath === 'string') return item.xpath.trim();
+                return '';
+              })(),
               exists: item.exists === false ? false : item.exists === true ? true : null,
-              rect: normalizeRect(item.rect)
+              rect: normalizeRect(item.rect),
+              rectFetched: item.rectFetched === true,
+              textFetched: item.textFetched === true,
+              textValue: item.textValue,
+              propertyEntries: (() => {
+                const normalized = normalizePropertyEntries(item.propertyEntries);
+                if (normalized.length) return normalized;
+                const legacyName = typeof item.propertyName === 'string' ? item.propertyName.trim() : '';
+                if (item.propertyFetched === true && legacyName) {
+                  return [
+                    {
+                      source: normalizePropertySource(item.propertySource),
+                      name: legacyName,
+                      value: item.propertyValue
+                    }
+                  ];
+                }
+                return [];
+              })(),
+              propertyFetched: (() => {
+                const normalized = normalizePropertyEntries(item.propertyEntries);
+                if (normalized.length) return true;
+                const legacyName = typeof item.propertyName === 'string' ? item.propertyName.trim() : '';
+                return item.propertyFetched === true && Boolean(legacyName);
+              })(),
+              propertySource: (() => {
+                const normalized = normalizePropertyEntries(item.propertyEntries);
+                if (normalized.length) return normalizePropertySource(normalized[0].source);
+                return normalizePropertySource(item.propertySource);
+              })(),
+              propertyName: (() => {
+                const normalized = normalizePropertyEntries(item.propertyEntries);
+                if (normalized.length) return normalized[0].name;
+                return typeof item.propertyName === 'string' ? item.propertyName.trim() : '';
+              })(),
+              propertyValue: (() => {
+                const normalized = normalizePropertyEntries(item.propertyEntries);
+                if (normalized.length) return normalized[0].value;
+                return item.propertyValue;
+              })(),
+              displayedFetched: item.displayedFetched === true,
+              displayedValue: item.displayedValue,
+              enabledFetched: item.enabledFetched === true,
+              enabledValue: item.enabledValue,
+              cssEntries: (() => {
+                const normalized = normalizeCssEntries(item.cssEntries);
+                if (normalized.length) return normalized;
+                const legacyName = typeof item.cssPropertyName === 'string' ? item.cssPropertyName.trim() : '';
+                if (item.cssFetched === true && legacyName) {
+                  return [{ name: legacyName, value: item.cssValue }];
+                }
+                return [];
+              })(),
+              cssFetched: (() => {
+                const normalized = normalizeCssEntries(item.cssEntries);
+                if (normalized.length) return true;
+                const legacyName = typeof item.cssPropertyName === 'string' ? item.cssPropertyName.trim() : '';
+                return item.cssFetched === true && Boolean(legacyName);
+              })(),
+              cssPropertyName: (() => {
+                const normalized = normalizeCssEntries(item.cssEntries);
+                if (normalized.length) return normalized[0].name;
+                return typeof item.cssPropertyName === 'string' ? item.cssPropertyName.trim() : '';
+              })(),
+              cssValue: (() => {
+                const normalized = normalizeCssEntries(item.cssEntries);
+                if (normalized.length) return normalized[0].value;
+                return item.cssValue;
+              })()
             }))
           );
         } else {
@@ -545,6 +837,19 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     } finally {
       setCapturingScreenshot(false);
     }
+  };
+
+  const handleSetScreenshotRefreshInterval = () => {
+    const parsed = Number(screenshotRefreshSecondsInput);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      setError('Live refresh interval must be a number greater than or equal to 1');
+      return;
+    }
+
+    const nextInterval = Math.max(1, Math.round(parsed));
+    setScreenshotRefreshSeconds(nextInterval);
+    setScreenshotRefreshSecondsInput(String(nextInterval));
+    setSuccess(`Live refresh interval set to ${nextInterval} second${nextInterval === 1 ? '' : 's'}`);
   };
 
   const handleRename = async (oldName, newName) => {
@@ -852,6 +1157,8 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     setLastFindResponse('');
     setPendingElementId('');
     setPendingElementName('');
+    setPendingElementLocatorUsing('');
+    setPendingElementLocatorValue('');
 
     try {
       let result;
@@ -882,8 +1189,33 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       setLastFindResponse(JSON.stringify(result, null, 2));
 
       if (ids.length === 1) {
-        setPendingElementId(ids[0]);
-        setSuccess('Found exactly one element. Give it a name to save it.');
+        const matchedElementId = ids[0];
+        const existingSavedElement = savedElements.find((el) => el.id === matchedElementId);
+        if (existingSavedElement) {
+          const matchedLocatorValue = findSelector.trim();
+          setSavedElements((prev) =>
+            prev.map((el) =>
+              el.id === existingSavedElement.id
+                ? {
+                    ...el,
+                    locatorUsing: findUsing,
+                    locatorValue: matchedLocatorValue
+                  }
+                : el
+            )
+          );
+          setPendingElementId('');
+          setPendingElementName('');
+          setPendingElementLocatorUsing('');
+          setPendingElementLocatorValue('');
+          setSuccess(`Found exactly one element. Already saved as "${existingSavedElement.name}".`);
+          focusSavedElementTile(existingSavedElement.id);
+        } else {
+          setPendingElementId(matchedElementId);
+          setPendingElementLocatorUsing(findUsing);
+          setPendingElementLocatorValue(findSelector.trim());
+          setSuccess('Found exactly one element. Give it a name to save it.');
+        }
       } else if (ids.length === 0) {
         setSuccess('No elements matched the selector.');
       } else {
@@ -901,23 +1233,55 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const handleSavePendingElement = () => {
     const trimmedName = pendingElementName.trim();
     if (!pendingElementId || !trimmedName) return;
+    const newElementId = pendingElementId;
+    const newElementLocatorUsing = pendingElementLocatorUsing.trim();
+    const newElementLocatorValue = pendingElementLocatorValue.trim();
 
     if (savedElements.some((el) => el.name.toLowerCase() === trimmedName.toLowerCase())) {
       setError('Element name already exists. Choose a unique name.');
       return;
     }
 
+    const duplicateById = savedElements.find((el) => el.id === pendingElementId);
+    if (duplicateById) {
+      setError('Element id already exists in saved elements.');
+      focusSavedElementTile(duplicateById.id);
+      return;
+    }
+
     setSavedElements((prev) => [
       ...prev,
       {
-        id: pendingElementId,
+        id: newElementId,
         name: trimmedName,
+        idRefreshed: false,
         exists: null,
-        rect: null
+        rect: null,
+        rectFetched: false,
+        textFetched: false,
+        textValue: '',
+        locatorUsing: newElementLocatorUsing,
+        locatorValue: newElementLocatorValue,
+        propertyEntries: [],
+        propertyFetched: false,
+        propertySource: 'property',
+        propertyName: '',
+        propertyValue: '',
+        displayedFetched: false,
+        displayedValue: '',
+        enabledFetched: false,
+        enabledValue: '',
+        cssEntries: [],
+        cssFetched: false,
+        cssPropertyName: '',
+        cssValue: ''
       }
     ]);
+    scrollSavedElementTileIntoView(newElementId);
     setPendingElementId('');
     setPendingElementName('');
+    setPendingElementLocatorUsing('');
+    setPendingElementLocatorValue('');
     setSuccess(`Saved element: ${trimmedName}`);
   };
 
@@ -925,29 +1289,123 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     const name = manualElementName.trim();
     const id = manualElementId.trim();
     if (!name || !id) return;
+    const newElementId = id;
 
     if (savedElements.some((el) => el.name.toLowerCase() === name.toLowerCase())) {
       setError('Element name already exists. Choose a unique name.');
       return;
     }
 
-    if (savedElements.some((el) => el.id === id)) {
+    const duplicateById = savedElements.find((el) => el.id === id);
+    if (duplicateById) {
       setError('Element id already exists in saved elements.');
+      focusSavedElementTile(duplicateById.id);
       return;
     }
 
     setSavedElements((prev) => [
       ...prev,
       {
-        id,
+        id: newElementId,
         name,
+        idRefreshed: false,
         exists: null,
-        rect: null
+        rect: null,
+        rectFetched: false,
+        textFetched: false,
+        textValue: '',
+        locatorUsing: '',
+        locatorValue: '',
+        propertyEntries: [],
+        propertyFetched: false,
+        propertySource: 'property',
+        propertyName: '',
+        propertyValue: '',
+        displayedFetched: false,
+        displayedValue: '',
+        enabledFetched: false,
+        enabledValue: '',
+        cssEntries: [],
+        cssFetched: false,
+        cssPropertyName: '',
+        cssValue: ''
       }
     ]);
+    scrollSavedElementTileIntoView(newElementId);
     setManualElementName('');
     setManualElementId('');
     setSuccess(`Saved manual element: ${name}`);
+  };
+
+  const handleFindSavedElementByLocator = async (element) => {
+    const locatorUsing = typeof element?.locatorUsing === 'string' ? element.locatorUsing.trim() : '';
+    const locatorValue = typeof element?.locatorValue === 'string' ? element.locatorValue.trim() : '';
+    if (!locatorUsing || !locatorValue) {
+      setError(`No saved locator for: ${element.name}`);
+      return;
+    }
+
+    const actionKey = `findlocator:${element.id}`;
+    setRunningElementAction(actionKey);
+    setError('');
+    setSuccess('');
+
+    try {
+      const result = await api.findElements(appiumUrl, sessionId, locatorUsing, locatorValue, customHeaders);
+      const matches = Array.isArray(result?.value) ? result.value : [];
+      const ids = matches.map(getElementId).filter(Boolean);
+
+      if (ids.length === 0) {
+        setSavedElements((prev) =>
+          prev.map((el) => (el.id === element.id ? { ...el, exists: false } : el))
+        );
+        setError(`Saved locator matched no elements for: ${element.name}`);
+        return;
+      }
+
+      if (ids.length > 1) {
+        setError(`Saved locator matched ${ids.length} elements for: ${element.name}.`);
+        return;
+      }
+
+      const resolvedElementId = ids[0];
+      const duplicate = savedElements.find(
+        (el) => el.id === resolvedElementId && el.id !== element.id
+      );
+      if (duplicate) {
+        setError(`Saved XPath resolved to an id already used by "${duplicate.name}".`);
+        focusSavedElementTile(duplicate.id);
+        return;
+      }
+
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === element.id
+            ? {
+                ...el,
+                id: resolvedElementId,
+                idRefreshed: resolvedElementId !== element.id,
+                exists: true,
+                locatorUsing,
+                locatorValue
+              }
+            : el
+        )
+      );
+      setExpandedSavedElementId((prev) => (prev === element.id ? resolvedElementId : prev));
+      scrollSavedElementTileIntoView(resolvedElementId);
+      focusSavedElementTile(resolvedElementId);
+      setSuccess(
+        resolvedElementId === element.id
+          ? `Found element by saved locator: ${element.name}`
+          : `Found element and updated id for: ${element.name}`
+      );
+    } catch (err) {
+      setError('Find by saved locator failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
   };
 
   const handleRenameSavedElement = (id) => {
@@ -973,7 +1431,42 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     if (pendingElementId === id) {
       setPendingElementId('');
       setPendingElementName('');
+      setPendingElementLocatorUsing('');
+      setPendingElementLocatorValue('');
     }
+    if (expandedSavedElementId === id) {
+      setExpandedSavedElementId(null);
+    }
+  };
+
+  const handleClearSavedElementValues = (element) => {
+    setSavedElements((prev) =>
+      prev.map((el) =>
+        el.id === element.id
+          ? {
+              ...el,
+              textFetched: false,
+              textValue: '',
+              propertyEntries: [],
+              propertyFetched: false,
+              propertySource: 'property',
+              propertyName: '',
+              propertyValue: '',
+              cssEntries: [],
+              cssFetched: false,
+              cssPropertyName: '',
+              cssValue: '',
+              displayedFetched: false,
+              displayedValue: '',
+              enabledFetched: false,
+              enabledValue: '',
+              rect: null,
+              rectFetched: false
+            }
+          : el
+      )
+    );
+    setSuccess(`Cleared saved values for: ${element.name}`);
   };
 
   const handleCheckElementExists = async (element) => {
@@ -1006,7 +1499,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       if (!rect) {
         throw new Error('Rect response missing x/y/width/height');
       }
-      setSavedElements((prev) => prev.map((el) => (el.id === element.id ? { ...el, exists: true, rect } : el)));
+      setSavedElements((prev) =>
+        prev.map((el) => (el.id === element.id ? { ...el, exists: true, rect, rectFetched: true } : el))
+      );
       setSuccess(`Rect fetched for: ${element.name}`);
     } catch (err) {
       setError('Get rect failed: ' + err.message);
@@ -1067,6 +1562,223 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       setSuccess(`Clicked element: ${element.name}`);
     } catch (err) {
       setError('Element click failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleGetElementText = async (element) => {
+    const actionKey = `text:${element.id}`;
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      const result = await api.getElementText(appiumUrl, sessionId, element.id, customHeaders);
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === element.id
+            ? { ...el, exists: true, textFetched: true, textValue: result?.value }
+            : el
+        )
+      );
+      setSuccess(`Fetched text for: ${element.name}`);
+    } catch (err) {
+      setError('Get text failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleOpenElementPropertyModal = (element) => {
+    setElementPropertyTarget({ id: element.id, name: element.name });
+    setElementPropertyEndpointType('property');
+    setElementPropertyName('');
+    setElementPropertyResponse('');
+    setShowElementPropertyModal(true);
+  };
+
+  const handleCloseElementPropertyModal = () => {
+    if (fetchingElementProperty) return;
+    setShowElementPropertyModal(false);
+    setElementPropertyTarget(null);
+    setElementPropertyEndpointType('property');
+    setElementPropertyName('');
+    setElementPropertyResponse('');
+  };
+
+  const handleFetchElementProperty = async () => {
+    if (!elementPropertyTarget) return;
+
+    const selectedOption =
+      ELEMENT_PROPERTY_ENDPOINT_OPTIONS.find((option) => option.value === elementPropertyEndpointType) ||
+      ELEMENT_PROPERTY_ENDPOINT_OPTIONS[0];
+    const propertyName = elementPropertyName.trim();
+
+    if (selectedOption.requiresName && !propertyName) {
+      setError('Property name is required for the selected endpoint');
+      setElementPropertyResponse('Error: Property name is required for the selected endpoint');
+      return;
+    }
+
+    const actionKey = `property:${elementPropertyTarget.id}`;
+    setRunningElementAction(actionKey);
+    setFetchingElementProperty(true);
+    setElementPropertyResponse('');
+    setError('');
+    try {
+      let result;
+      switch (selectedOption.value) {
+        case 'attribute':
+          result = await api.getElementAttribute(
+            appiumUrl,
+            sessionId,
+            elementPropertyTarget.id,
+            propertyName,
+            customHeaders
+          );
+          break;
+        case 'property':
+        default:
+          result = await api.getElementProperty(
+            appiumUrl,
+            sessionId,
+            elementPropertyTarget.id,
+            propertyName,
+            customHeaders
+          );
+          break;
+      }
+
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === elementPropertyTarget.id
+            ? (() => {
+                const nextEntry = {
+                  source: normalizePropertySource(selectedOption.value),
+                  name: propertyName,
+                  value: result?.value
+                };
+                const existingEntries = normalizePropertyEntries(el.propertyEntries);
+                const nextEntries = upsertLatestUnique(existingEntries, nextEntry, getPropertyEntryKey);
+                return {
+                  ...el,
+                  exists: true,
+                  propertyEntries: nextEntries,
+                  propertyFetched: nextEntries.length > 0,
+                  propertySource: nextEntry.source,
+                  propertyName: nextEntry.name,
+                  propertyValue: nextEntry.value
+                };
+              })()
+            : el
+        )
+      );
+
+      const sourceLabel = getElementPropertySourceLabel(selectedOption.value);
+      const nameSuffix = selectedOption.requiresName ? ` "${propertyName}"` : '';
+      setSuccess(`Fetched ${sourceLabel.toLowerCase()}${nameSuffix} for: ${elementPropertyTarget.name}`);
+      setShowElementPropertyModal(false);
+      setElementPropertyTarget(null);
+      setElementPropertyEndpointType('property');
+      setElementPropertyName('');
+      setElementPropertyResponse('');
+    } catch (err) {
+      setError('Get property failed: ' + err.message);
+      setElementPropertyResponse(formatErrorForTextarea(err));
+    } finally {
+      setRunningElementAction('');
+      setFetchingElementProperty(false);
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleGetElementDisplayed = async (element) => {
+    const actionKey = `displayed:${element.id}`;
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      const result = await api.getElementDisplayed(appiumUrl, sessionId, element.id, customHeaders);
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === element.id
+            ? { ...el, exists: true, displayedFetched: true, displayedValue: result?.value }
+            : el
+        )
+      );
+      setSuccess(`Fetched displayed for: ${element.name}`);
+    } catch (err) {
+      setError('Get displayed failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleGetElementEnabled = async (element) => {
+    const actionKey = `enabled:${element.id}`;
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      const result = await api.getElementEnabled(appiumUrl, sessionId, element.id, customHeaders);
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === element.id
+            ? { ...el, exists: true, enabledFetched: true, enabledValue: result?.value }
+            : el
+        )
+      );
+      setSuccess(`Fetched enabled for: ${element.name}`);
+    } catch (err) {
+      setError('Get enabled failed: ' + err.message);
+    } finally {
+      setRunningElementAction('');
+      await refreshLogsAfterWebDriverAction();
+    }
+  };
+
+  const handleGetElementCssValue = async (element) => {
+    const cssPropertyInput = prompt('Enter CSS property name');
+    if (cssPropertyInput === null) return;
+    const cssPropertyName = cssPropertyInput.trim();
+    if (!cssPropertyName) {
+      setError('CSS property name is required');
+      return;
+    }
+
+    const actionKey = `css:${element.id}`;
+    setRunningElementAction(actionKey);
+    setError('');
+    try {
+      const result = await api.getElementCssValue(
+        appiumUrl,
+        sessionId,
+        element.id,
+        cssPropertyName,
+        customHeaders
+      );
+      setSavedElements((prev) =>
+        prev.map((el) =>
+          el.id === element.id
+            ? (() => {
+                const nextEntry = { name: cssPropertyName, value: result?.value };
+                const existingEntries = normalizeCssEntries(el.cssEntries);
+                const nextEntries = upsertLatestUnique(existingEntries, nextEntry, getCssEntryKey);
+                return {
+                  ...el,
+                  exists: true,
+                  cssEntries: nextEntries,
+                  cssFetched: nextEntries.length > 0,
+                  cssPropertyName: nextEntry.name,
+                  cssValue: nextEntry.value
+                };
+              })()
+            : el
+        )
+      );
+      setSuccess(`Fetched CSS "${cssPropertyName}" for: ${element.name}`);
+    } catch (err) {
+      setError('Get CSS failed: ' + err.message);
     } finally {
       setRunningElementAction('');
       await refreshLogsAfterWebDriverAction();
@@ -1238,14 +1950,20 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
         </div>
 
         {/* Messages */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
-            {error}
-          </div>
-        )}
-        {success && (
-          <div className="mb-4 p-3 bg-green-900/50 border border-green-700 rounded-lg text-green-300 text-sm">
-            {success}
+        {(error || success) && (
+          <div className="fixed top-5 left-0 right-0 z-[10000] px-4 pointer-events-none">
+            <div className="max-w-4xl mx-auto space-y-2">
+              {error && (
+                <div className="pointer-events-auto p-3 bg-red-900/70 border border-red-700 rounded-lg text-red-200 text-sm shadow-lg">
+                  {error}
+                </div>
+              )}
+              {success && (
+                <div className="pointer-events-auto p-3 bg-green-900/70 border border-green-700 rounded-lg text-green-200 text-sm shadow-lg">
+                  {success}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1488,12 +2206,22 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                       <input
                         type="number"
                         min="1"
-                        value={screenshotRefreshSeconds}
-                        onChange={(e) => setScreenshotRefreshSeconds(e.target.value)}
+                        value={screenshotRefreshSecondsInput}
+                        onChange={(e) => setScreenshotRefreshSecondsInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSetScreenshotRefreshInterval();
+                        }}
                         className="w-16 bg-transparent text-white text-sm focus:outline-none"
                         title="Live refresh interval in seconds"
                       />
                       <span className="text-gray-300 text-xs">sec</span>
+                      <button
+                        onClick={handleSetScreenshotRefreshInterval}
+                        className="px-2 py-0.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-[11px] transition-colors cursor-pointer"
+                        title="Apply refresh interval"
+                      >
+                        Set
+                      </button>
                     </div>
                   </>
                 )}
@@ -1607,7 +2335,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                 </div>
                 <select
                   value={findUsing}
-                  onChange={(e) => setFindUsing(e.target.value)}
+                  onChange={(e) => {
+                    const nextUsing = e.target.value;
+                    setFindUsing(nextUsing);
+                    if (nextUsing === 'xpath') {
+                      setFindSelector(DEFAULT_XPATH_SELECTOR);
+                    }
+                  }}
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 >
                   {FIND_STRATEGIES.map((strategy) => (
@@ -1626,7 +2360,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                   type="text"
                   value={findSelector}
                   onChange={(e) => setFindSelector(e.target.value)}
-                  placeholder="//button"
+                  placeholder={DEFAULT_XPATH_SELECTOR}
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono text-sm"
                 />
                 {findUsing === '-android uiautomator' && (
@@ -1762,19 +2496,50 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
               </div>
             )}
 
-            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+            <div className="saved-elements-list space-y-2 max-h-96 overflow-y-auto overflow-x-hidden pr-1">
               {savedElements.length === 0 ? (
-                <p className="text-gray-400 text-sm">No saved elements yet</p>
+                <p className="saved-elements-empty text-gray-400 text-sm">No saved elements yet</p>
               ) : (
                 savedElements.map((element) => {
+                  const tileClassToken = toCssClassToken(element.id);
+                  const isBlinkingTile = blinkingSavedElementId === element.id;
+                  const isBlinkStateOn = isBlinkingTile && savedElementBlinkOn;
                   const rowMuted = element.exists === false;
                   const isCheckingExists = runningElementAction === `exists:${element.id}`;
+                  const hasSavedLocator = Boolean(
+                    typeof element.locatorUsing === 'string' &&
+                    element.locatorUsing.trim() &&
+                    typeof element.locatorValue === 'string' &&
+                    element.locatorValue.trim()
+                  );
+                  const isFindingBySavedLocator = runningElementAction === `findlocator:${element.id}`;
                   const isGettingRect = runningElementAction === `rect:${element.id}`;
                   const isTappingAtLocation = runningElementAction === `taploc:${element.id}`;
                   const isTappingElement = runningElementAction === `tap:${element.id}`;
                   const isClickingElement = runningElementAction === `click:${element.id}`;
+                  const isGettingText = runningElementAction === `text:${element.id}`;
+                  const isGettingProperty = runningElementAction === `property:${element.id}`;
+                  const isGettingDisplayed = runningElementAction === `displayed:${element.id}`;
+                  const isGettingEnabled = runningElementAction === `enabled:${element.id}`;
+                  const isGettingCss = runningElementAction === `css:${element.id}`;
                   const isSendingKeysToElement = runningElementAction === `keys:${element.id}`;
+                  const isExpanded = expandedSavedElementId === element.id;
                   const rect = normalizeRect(element.rect);
+                  const propertyEntries = normalizePropertyEntries(element.propertyEntries);
+                  const cssEntries = normalizeCssEntries(element.cssEntries);
+                  const showTextRow = element.textFetched === true;
+                  const showPropertyRow = propertyEntries.length > 0;
+                  const showCssRow = cssEntries.length > 0;
+                  const showDisplayedRow = element.displayedFetched === true;
+                  const showEnabledRow = element.enabledFetched === true;
+                  const showRectRow = element.rectFetched === true;
+                  const hasValueRows =
+                    showTextRow ||
+                    showPropertyRow ||
+                    showCssRow ||
+                    showDisplayedRow ||
+                    showEnabledRow ||
+                    showRectRow;
                   const statusLabel = isCheckingExists
                     ? 'Checking...'
                     : element.exists === true
@@ -1789,66 +2554,265 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                       : element.exists === false
                         ? 'bg-red-900/50 text-red-300 border-red-700/60'
                         : 'bg-gray-700 text-gray-300 border-gray-600';
+                  const blinkingTileStyle = isBlinkStateOn
+                    ? {
+                        borderColor: 'rgb(56 189 248)',
+                        backgroundColor: 'rgba(8, 145, 178, 0.38)',
+                        boxShadow:
+                          'inset 0 0 0 2px rgba(56,189,248,0.95), inset 0 0 22px rgba(6,182,212,0.82)',
+                        opacity: 1
+                      }
+                    : undefined;
                   return (
                     <div
                       key={element.id}
-                      className={`group p-3 rounded-lg border ${
+                      ref={(node) => {
+                        if (node) {
+                          savedElementTileRefs.current.set(element.id, node);
+                        } else {
+                          savedElementTileRefs.current.delete(element.id);
+                        }
+                      }}
+                      className={`saved-element-tile saved-element-tile-${tileClassToken} group relative p-3 rounded-lg border ${
                         rowMuted
                           ? 'bg-gray-900/60 border-gray-700 opacity-60'
                           : 'bg-gray-700 border-gray-600'
-                      }`}
+                      } transition-[box-shadow,border-color,background-color] duration-75 ease-linear`}
+                      style={blinkingTileStyle}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-white text-sm font-medium truncate">{element.name}</p>
-                          <div className="mt-1">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-medium ${statusClass}`}>
-                              {statusLabel}
-                            </span>
+                      <div className="saved-element-tile-content">
+                        <div className="saved-element-main min-w-0">
+                          <div className="saved-element-status-wrap mb-2">
+                            <div className="inline-flex items-center gap-1">
+                              <span className={`saved-element-status inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-medium ${statusClass}`}>
+                                {statusLabel}
+                              </span>
+                              {element.idRefreshed === true && (
+                                <span className="saved-element-status-refreshed inline-flex items-center px-1.5 py-0.5 rounded border border-cyan-500/70 bg-cyan-900/40 text-[9px] font-medium text-cyan-200">
+                                  Refreshed
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <p className="text-gray-400 text-[11px] font-mono truncate">{element.id}</p>
-                          <p className="text-gray-300 text-[11px] font-mono truncate mt-1">
-                            {rect
-                              ? `Rect x:${Math.round(rect.x)} y:${Math.round(rect.y)} w:${Math.round(rect.width)} h:${Math.round(rect.height)}`
-                              : 'Rect: not fetched'}
+                          <div className="saved-element-header">
+                            <p className="saved-element-name text-white text-sm font-medium truncate pr-44">{element.name}</p>
+                          </div>
+                          <p className="saved-element-id text-gray-400 text-[11px] font-mono truncate mt-1">
+                            <span className="text-gray-500 mr-1">Element ID:</span>
+                            {element.id}
                           </p>
-                        </div>
-                        <div className="hidden group-hover:block shrink-0 w-full max-w-[288px]">
-                          <div className="grid grid-cols-4 gap-1">
+                          <div className="saved-element-quick-actions mt-2 flex flex-wrap gap-1">
                             <button
                               onClick={() => handleCheckElementExists(element)}
                               disabled={isCheckingExists}
-                              className="h-7 w-full bg-gray-600 hover:bg-gray-500 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              className="saved-element-btn saved-element-btn-exists h-6 px-2 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
                               title="Check element exists"
                             >
-                              Exists
+                              {isCheckingExists ? 'Checking...' : 'Exists'}
+                            </button>
+                            <button
+                              onClick={() => handleFindSavedElementByLocator(element)}
+                              disabled={isFindingBySavedLocator || !hasSavedLocator}
+                              className="saved-element-btn saved-element-btn-find h-6 px-2 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:text-gray-300 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title={hasSavedLocator ? 'Find element again by saved locator' : 'No saved locator for this element'}
+                            >
+                              {isFindingBySavedLocator ? 'Finding...' : 'Find'}
+                            </button>
+                            <button
+                              onClick={() => setExpandedSavedElementId((prev) => (prev === element.id ? null : element.id))}
+                              className="saved-element-btn saved-element-btn-expand h-6 px-2 bg-slate-600 hover:bg-slate-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center gap-1"
+                              title={isExpanded ? 'Collapse advanced section' : 'Expand advanced section'}
+                            >
+                              {isExpanded ? 'Collapse Advanced' : 'Expand Advanced'}
+                              <svg
+                                className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                          </div>
+                          <div className="saved-element-top-actions absolute top-2 right-2 flex items-center gap-1">
+                            <button
+                              onClick={() => handleRenameSavedElement(element.id)}
+                              className="saved-element-btn saved-element-btn-rename saved-element-btn-rename-icon h-6 w-6 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Rename element"
+                              aria-label={`Rename ${element.name}`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.586 3.586a2 2 0 112.828 2.828L12 15.828 8 16l.172-4 10.414-10.414z" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => handleClearSavedElementValues(element)}
+                              className="saved-element-btn saved-element-btn-clear h-6 px-2 bg-slate-600 hover:bg-slate-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Clear saved values"
+                              aria-label={`Clear saved values for ${element.name}`}
+                            >
+                              Clear
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSavedElement(element.id)}
+                              className="saved-element-btn saved-element-btn-delete saved-element-btn-delete-icon h-6 w-6 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Delete element"
+                              aria-label={`Delete ${element.name}`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12h8l1-12" />
+                              </svg>
+                            </button>
+                          </div>
+                          {isExpanded && (
+                            <>
+                              {hasValueRows && (
+                                <div className="saved-element-values-table mt-2 overflow-hidden rounded border border-gray-600/70">
+                                  <table className="w-full table-fixed border-collapse text-[11px] font-mono">
+                                    <tbody>
+                                      {showTextRow && (
+                                        <tr className="saved-element-value-row border-b border-gray-600/50">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            Text
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-text bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            {formatElementValueForDisplay(element.textValue)}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      {showPropertyRow && (
+                                        <tr className="saved-element-value-row border-b border-gray-600/50">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            Properties
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-property bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            <table className="saved-element-subtable w-full border-collapse text-[10px] border border-gray-600/80">
+                                              <thead>
+                                                <tr>
+                                                  <th className="px-1 py-0.5 text-left text-gray-400 font-medium border border-gray-600/80">Name</th>
+                                                  <th className="px-1 py-0.5 text-left text-gray-400 font-medium border border-gray-600/80">Value</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {propertyEntries.map((entry) => (
+                                                  <tr key={getPropertyEntryKey(entry)} className="align-top">
+                                                    <td className="px-1 py-0.5 text-gray-300 border border-gray-600/80">
+                                                      {entry.name}
+                                                    </td>
+                                                    <td className="px-1 py-0.5 text-gray-200 border border-gray-600/80 whitespace-pre-wrap break-words">
+                                                      {formatElementValueForDisplay(entry.value)}
+                                                    </td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </td>
+                                        </tr>
+                                      )}
+                                      {showCssRow && (
+                                        <tr className="saved-element-value-row border-b border-gray-600/50">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            CSS Properties
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-css bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            {cssEntries.map((entry) => (
+                                              <div key={getCssEntryKey(entry)}>
+                                                {`${entry.name}: ${formatElementValueForDisplay(entry.value)}`}
+                                              </div>
+                                            ))}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      {showDisplayedRow && (
+                                        <tr className="saved-element-value-row border-b border-gray-600/50">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            Displayed
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-displayed bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            {formatElementValueForDisplay(element.displayedValue)}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      {showEnabledRow && (
+                                        <tr className="saved-element-value-row border-b border-gray-600/50">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            Enabled
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-enabled bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            {formatElementValueForDisplay(element.enabledValue)}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      {showRectRow && (
+                                        <tr className="saved-element-value-row">
+                                          <th className="saved-element-value-label w-44 bg-gray-800/70 px-2 py-1 text-left font-medium text-gray-300">
+                                            Rect
+                                          </th>
+                                          <td className="saved-element-value saved-element-value-rect bg-gray-900/60 px-2 py-1 text-gray-200 whitespace-pre-wrap break-words">
+                                            {rect
+                                              ? `x:${Math.round(rect.x)} y:${Math.round(rect.y)} w:${Math.round(rect.width)} h:${Math.round(rect.height)}`
+                                              : 'not fetched'}
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                        <div className="saved-element-advanced-actions mt-2 w-full">
+                          <div className="saved-element-advanced-actions-grid grid grid-cols-5 gap-1">
+                            <button
+                              onClick={() => handleGetElementText(element)}
+                              disabled={isGettingText}
+                              className="saved-element-btn saved-element-btn-text h-7 w-full bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element text"
+                            >
+                              {isGettingText ? 'Text...' : 'Text'}
+                            </button>
+                            <button
+                              onClick={() => handleOpenElementPropertyModal(element)}
+                              disabled={isGettingProperty}
+                              className="saved-element-btn saved-element-btn-property h-7 w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element property"
+                            >
+                              {isGettingProperty ? 'Prop...' : 'Property'}
+                            </button>
+                            <button
+                              onClick={() => handleGetElementCssValue(element)}
+                              disabled={isGettingCss}
+                              className="saved-element-btn saved-element-btn-css h-7 w-full bg-lime-600 hover:bg-lime-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element css value"
+                            >
+                              {isGettingCss ? 'CSS...' : 'CSS'}
+                            </button>
+                            <button
+                              onClick={() => handleGetElementDisplayed(element)}
+                              disabled={isGettingDisplayed}
+                              className="saved-element-btn saved-element-btn-displayed h-7 w-full bg-rose-600 hover:bg-rose-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element displayed"
+                            >
+                              {isGettingDisplayed ? 'Disp...' : 'Displayed'}
+                            </button>
+                            <button
+                              onClick={() => handleGetElementEnabled(element)}
+                              disabled={isGettingEnabled}
+                              className="saved-element-btn saved-element-btn-enabled h-7 w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              title="Get element enabled"
+                            >
+                              {isGettingEnabled ? 'Enbl...' : 'Enabled'}
                             </button>
                             <button
                               onClick={() => handleGetElementRect(element)}
                               disabled={isGettingRect}
-                              className="h-7 w-full bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              className="saved-element-btn saved-element-btn-rect h-7 w-full bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
                               title="Get element rect"
                             >
                               {isGettingRect ? 'Rect...' : 'Rect'}
                             </button>
                             <button
-                              onClick={() => handleRenameSavedElement(element.id)}
-                              className="h-7 w-full bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
-                              title="Rename element"
-                            >
-                              Rename
-                            </button>
-                            <button
-                              onClick={() => handleDeleteSavedElement(element.id)}
-                              className="h-7 w-full bg-red-600 hover:bg-red-700 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
-                              title="Delete element"
-                            >
-                              Delete
-                            </button>
-                            <button
                               onClick={() => handleTapElement(element)}
                               disabled={isTappingElement}
-                              className="h-7 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              className="saved-element-btn saved-element-btn-tap h-7 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
                               title="Tap element"
                             >
                               {isTappingElement ? 'Tap...' : 'Tap'}
@@ -1856,7 +2820,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                             <button
                               onClick={() => handleTapAtElementLocation(element)}
                               disabled={isTappingAtLocation}
-                              className="h-7 w-full bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              className="saved-element-btn saved-element-btn-tap-location h-7 w-full bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
                               title="Tap at element location"
                             >
                               {isTappingAtLocation ? 'Tap@Loc...' : 'Tap @Loc'}
@@ -1864,7 +2828,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                             <button
                               onClick={() => handleClickElement(element)}
                               disabled={isClickingElement}
-                              className="h-7 w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
+                              className="saved-element-btn saved-element-btn-click h-7 w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center"
                               title="Click element"
                             >
                               {isClickingElement ? 'Click...' : 'Click'}
@@ -1872,7 +2836,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                             <button
                               onClick={() => handleOpenElementKeysModal(element)}
                               disabled={isSendingKeysToElement}
-                              className="h-7 w-full bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center gap-1"
+                              className="saved-element-btn saved-element-btn-keys h-7 w-full bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-[10px] cursor-pointer inline-flex items-center justify-center gap-1"
                               title="Send keys to element"
                             >
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1882,6 +2846,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
                               {isSendingKeysToElement ? 'Keys...' : 'Keys'}
                             </button>
                           </div>
+                        </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -2375,10 +3342,108 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
           />
         )}
 
+        {/* Element Property Modal */}
+        {showElementPropertyModal && elementPropertyTarget && renderModalInViewport(
+          <div
+            className="z-50 bg-black/70 flex items-start justify-center p-4 overflow-y-auto"
+            style={modalOverlayStyle}
+          >
+            <div
+              className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl max-h-[calc(100vh-40px)] overflow-y-auto"
+              style={modalCardViewportStyle}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                <div className="min-w-0">
+                  <h3 className="text-white font-semibold">Get Element Property</h3>
+                  <p className="text-[11px] text-gray-400 font-mono truncate">
+                    {elementPropertyTarget.name} ({elementPropertyTarget.id})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseElementPropertyModal}
+                  disabled={fetchingElementProperty}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-gray-200 rounded text-sm cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-1">Endpoint</label>
+                  <select
+                    value={elementPropertyEndpointType}
+                    onChange={(e) => setElementPropertyEndpointType(e.target.value)}
+                    disabled={fetchingElementProperty}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm"
+                  >
+                    {ELEMENT_PROPERTY_ENDPOINT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {elementPropertyEndpointRequiresName && (
+                  <div>
+                    <label className="block text-gray-300 text-sm font-medium mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={elementPropertyName}
+                      onChange={(e) => setElementPropertyName(e.target.value)}
+                      disabled={fetchingElementProperty}
+                      placeholder="Enter property/attribute name..."
+                      className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm font-mono"
+                    />
+                  </div>
+                )}
+
+                <p className="text-[11px] text-cyan-300 font-mono break-all">
+                  GET {elementPropertyEndpointPreview}
+                </p>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseElementPropertyModal}
+                    disabled={fetchingElementProperty}
+                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-sm cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFetchElementProperty}
+                    disabled={fetchingElementProperty || (elementPropertyEndpointRequiresName && !elementPropertyNameTrimmed)}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 disabled:text-gray-300 text-white rounded text-sm cursor-pointer"
+                  >
+                    {fetchingElementProperty ? 'Fetching...' : 'Fetch'}
+                  </button>
+                </div>
+
+                <div>
+                  <p className="text-[11px] text-gray-400 mb-1">Response</p>
+                  <pre className="bg-gray-900 border border-gray-700 rounded p-2 text-gray-300 text-xs font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                    {elementPropertyResponse || '(no response yet)'}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Send Keys Modal */}
-        {showElementKeysModal && elementKeysTarget && (
-          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-            <div className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl">
+        {showElementKeysModal && elementKeysTarget && renderModalInViewport(
+          <div
+            className="z-50 bg-black/70 flex items-start justify-center p-4 overflow-y-auto"
+            style={modalOverlayStyle}
+          >
+            <div
+              className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl max-h-[calc(100vh-40px)] overflow-y-auto"
+              style={modalCardViewportStyle}
+            >
               <div className="flex items-center justify-between p-4 border-b border-gray-700">
                 <div className="min-w-0">
                   <h3 className="text-white font-semibold">Send Keys</h3>
@@ -2461,9 +3526,15 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
         )}
 
         {/* Send Focused Keys Modal */}
-        {showFocusedKeysModal && (
-          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-            <div className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl">
+        {showFocusedKeysModal && renderModalInViewport(
+          <div
+            className="z-50 bg-black/70 flex items-start justify-center p-4 overflow-y-auto"
+            style={modalOverlayStyle}
+          >
+            <div
+              className="w-full max-w-xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl max-h-[calc(100vh-40px)] overflow-y-auto"
+              style={modalCardViewportStyle}
+            >
               <div className="flex items-center justify-between p-4 border-b border-gray-700">
                 <div className="min-w-0">
                   <h3 className="text-white font-semibold">Send Keys To Focused Element</h3>
@@ -2543,9 +3614,15 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
         )}
 
         {/* Strategy Reference Modal */}
-        {showStrategyModal && (
-          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-            <div className="w-full max-w-3xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl max-h-[80vh] overflow-hidden">
+        {showStrategyModal && renderModalInViewport(
+          <div
+            className="z-50 bg-black/70 flex items-start justify-center p-4 overflow-y-auto"
+            style={modalOverlayStyle}
+          >
+            <div
+              className="w-full max-w-3xl bg-gray-800 border border-gray-700 rounded-xl shadow-2xl max-h-[calc(100vh-40px)] overflow-hidden"
+              style={modalCardViewportStyle}
+            >
               <div className="flex items-center justify-between p-4 border-b border-gray-700">
                 <h3 className="text-white font-semibold">Strategy Reference</h3>
                 <button
