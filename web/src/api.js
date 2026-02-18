@@ -251,6 +251,72 @@ export const api = {
     );
   },
 
+  async getElementText(appiumUrl, sessionId, elementId, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/text`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
+  async getElementProperty(appiumUrl, sessionId, elementId, name, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/property/${encodeURIComponent(name)}`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
+  async getElementAttribute(appiumUrl, sessionId, elementId, name, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/attribute/${encodeURIComponent(name)}`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
+  async getElementDisplayed(appiumUrl, sessionId, elementId, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/displayed`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
+  async getElementEnabled(appiumUrl, sessionId, elementId, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/enabled`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
+  async getElementCssValue(appiumUrl, sessionId, elementId, propertyName, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      `/session/{session id}/element/${encodeURIComponent(elementId)}/css/${encodeURIComponent(propertyName)}`,
+      'GET',
+      null,
+      customHeaders
+    );
+  },
+
   async sendKeysToElement(appiumUrl, sessionId, elementId, text, mode = 'w3c', customHeaders = {}) {
     const textValue = typeof text === 'string' ? text : String(text ?? '');
     const resolvedMode = typeof mode === 'string' ? mode : 'w3c';
