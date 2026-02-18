@@ -62,6 +62,23 @@ function buildSwipeActions({ x1 = 0, y1 = 0, x2 = 0, y2 = 0, duration = 300 } = 
   };
 }
 
+function buildKeyboardActions(text = '') {
+  const value = typeof text === 'string' ? text : String(text ?? '');
+  const keyActions = Array.from(value).flatMap((character) => ([
+    { type: 'keyDown', value: character },
+    { type: 'keyUp', value: character }
+  ]));
+  return {
+    actions: [
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: keyActions
+      }
+    ]
+  };
+}
+
 export const api = {
   async getSessions(appiumUrl, customHeaders = {}) {
     const response = await fetch(`${API_BASE}/sessions`, {
@@ -423,6 +440,17 @@ export const api = {
       '/session/{session id}/actions',
       'POST',
       buildSwipeActions({ x1, y1, x2, y2 }),
+      customHeaders
+    );
+  },
+
+  async sendKeysByActions(appiumUrl, sessionId, text, customHeaders = {}) {
+    return this.genericRequest(
+      appiumUrl,
+      sessionId,
+      '/session/{session id}/actions',
+      'POST',
+      buildKeyboardActions(text),
       customHeaders
     );
   }
