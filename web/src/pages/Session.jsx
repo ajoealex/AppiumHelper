@@ -40,6 +40,68 @@ const EXECUTE_SCRIPT_PAYLOAD_EXAMPLE = `{
   "args": [{ "action": "getButtons" }]
 }`;
 const REQUEST_HISTORY_LIMIT = 10;
+const GENERIC_SESSION_ENDPOINT_PREFIX = '/session/{session id}/';
+const WEBDRIVER_REFERENCE_PRESETS = [
+  { title: 'New Session', method: 'POST', endpoint: '/session', payload: '{\\n  "capabilities": {\\n    "alwaysMatch": {\\n      "browserName": "chrome"\\n    }\\n  }\\n}' },
+  { title: 'Delete Session', method: 'DELETE', endpoint: '/session/{sessionId}', payload: '' },
+  { title: 'Status', method: 'GET', endpoint: '/status', payload: '' },
+  { title: 'Get Timeouts', method: 'GET', endpoint: '/session/{sessionId}/timeouts', payload: '' },
+  { title: 'Set Timeouts', method: 'POST', endpoint: '/session/{sessionId}/timeouts', payload: '{\\n  "implicit": 5000,\\n  "pageLoad": 300000,\\n  "script": 30000\\n}' },
+  { title: 'Navigate To', method: 'POST', endpoint: '/session/{sessionId}/url', payload: '{\\n  "url": "https://example.com"\\n}' },
+  { title: 'Get Current URL', method: 'GET', endpoint: '/session/{sessionId}/url', payload: '' },
+  { title: 'Back', method: 'POST', endpoint: '/session/{sessionId}/back', payload: '{}' },
+  { title: 'Forward', method: 'POST', endpoint: '/session/{sessionId}/forward', payload: '{}' },
+  { title: 'Refresh', method: 'POST', endpoint: '/session/{sessionId}/refresh', payload: '{}' },
+  { title: 'Get Title', method: 'GET', endpoint: '/session/{sessionId}/title', payload: '' },
+  { title: 'Get Window Handle', method: 'GET', endpoint: '/session/{sessionId}/window', payload: '' },
+  { title: 'Close Window', method: 'DELETE', endpoint: '/session/{sessionId}/window', payload: '' },
+  { title: 'Switch To Window', method: 'POST', endpoint: '/session/{sessionId}/window', payload: '{\\n  "handle": "CDwindow-123"\\n}' },
+  { title: 'Get Window Handles', method: 'GET', endpoint: '/session/{sessionId}/window/handles', payload: '' },
+  { title: 'New Window', method: 'POST', endpoint: '/session/{sessionId}/window/new', payload: '{\\n  "type": "tab"\\n}' },
+  { title: 'Switch To Frame', method: 'POST', endpoint: '/session/{sessionId}/frame', payload: '{\\n  "id": 0\\n}' },
+  { title: 'Switch To Parent Frame', method: 'POST', endpoint: '/session/{sessionId}/frame/parent', payload: '{}' },
+  { title: 'Get Window Rect', method: 'GET', endpoint: '/session/{sessionId}/window/rect', payload: '' },
+  { title: 'Set Window Rect', method: 'POST', endpoint: '/session/{sessionId}/window/rect', payload: '{\\n  "x": 0,\\n  "y": 0,\\n  "width": 1280,\\n  "height": 800\\n}' },
+  { title: 'Maximize Window', method: 'POST', endpoint: '/session/{sessionId}/window/maximize', payload: '{}' },
+  { title: 'Minimize Window', method: 'POST', endpoint: '/session/{sessionId}/window/minimize', payload: '{}' },
+  { title: 'Fullscreen Window', method: 'POST', endpoint: '/session/{sessionId}/window/fullscreen', payload: '{}' },
+  { title: 'Get Active Element', method: 'GET', endpoint: '/session/{sessionId}/element/active', payload: '' },
+  { title: 'Get Element Shadow Root', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/shadow', payload: '' },
+  { title: 'Find Element', method: 'POST', endpoint: '/session/{sessionId}/element', payload: '{\\n  "using": "xpath",\\n  "value": "//input[@id=\\\'username\\\']"\\n}' },
+  { title: 'Find Elements', method: 'POST', endpoint: '/session/{sessionId}/elements', payload: '{\\n  "using": "css selector",\\n  "value": ".btn"\\n}' },
+  { title: 'Find Element From Element', method: 'POST', endpoint: '/session/{sessionId}/element/{elementId}/element', payload: '{\\n  "using": "css selector",\\n  "value": "span"\\n}' },
+  { title: 'Find Elements From Element', method: 'POST', endpoint: '/session/{sessionId}/element/{elementId}/elements', payload: '{\\n  "using": "css selector",\\n  "value": "span"\\n}' },
+  { title: 'Find Element From Shadow Root', method: 'POST', endpoint: '/session/{sessionId}/shadow/{shadowId}/element', payload: '{\\n  "using": "css selector",\\n  "value": "button"\\n}' },
+  { title: 'Find Elements From Shadow Root', method: 'POST', endpoint: '/session/{sessionId}/shadow/{shadowId}/elements', payload: '{\\n  "using": "css selector",\\n  "value": "button"\\n}' },
+  { title: 'Is Element Selected', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/selected', payload: '' },
+  { title: 'Get Element Property', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/property/{name}', payload: '' },
+  { title: 'Get Element Text', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/text', payload: '' },
+  { title: 'Get Element Tag Name', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/name', payload: '' },
+  { title: 'Get Element Rect', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/rect', payload: '' },
+  { title: 'Is Element Enabled', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/enabled', payload: '' },
+  { title: 'Get Computed Role', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/computedrole', payload: '' },
+  { title: 'Get Computed Label', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/computedlabel', payload: '' },
+  { title: 'Element Click', method: 'POST', endpoint: '/session/{sessionId}/element/{elementId}/click', payload: '{}' },
+  { title: 'Element Clear', method: 'POST', endpoint: '/session/{sessionId}/element/{elementId}/clear', payload: '{}' },
+  { title: 'Element Send Keys', method: 'POST', endpoint: '/session/{sessionId}/element/{elementId}/value', payload: '{\\n  "text": "Hello World"\\n}' },
+  { title: 'Get Page Source', method: 'GET', endpoint: '/session/{sessionId}/source', payload: '' },
+  { title: 'Execute Script', method: 'POST', endpoint: '/session/{sessionId}/execute/sync', payload: '{\\n  "script": "return document.title;",\\n  "args": []\\n}' },
+  { title: 'Execute Async Script', method: 'POST', endpoint: '/session/{sessionId}/execute/async', payload: '{\\n  "script": "var cb = arguments[arguments.length - 1]; cb(\\\'done\\\');",\\n  "args": []\\n}' },
+  { title: 'Get All Cookies', method: 'GET', endpoint: '/session/{sessionId}/cookie', payload: '' },
+  { title: 'Get Named Cookie', method: 'GET', endpoint: '/session/{sessionId}/cookie/{name}', payload: '' },
+  { title: 'Add Cookie', method: 'POST', endpoint: '/session/{sessionId}/cookie', payload: '{\\n  "cookie": {\\n    "name": "sessionId",\\n    "value": "12345",\\n    "path": "/",\\n    "secure": false\\n  }\\n}' },
+  { title: 'Delete Cookie', method: 'DELETE', endpoint: '/session/{sessionId}/cookie/{name}', payload: '' },
+  { title: 'Delete All Cookies', method: 'DELETE', endpoint: '/session/{sessionId}/cookie', payload: '' },
+  { title: 'Perform Actions', method: 'POST', endpoint: '/session/{sessionId}/actions', payload: '{\\n  "actions": [\\n    {\\n      "type": "pointer",\\n      "id": "mouse",\\n      "parameters": { "pointerType": "mouse" },\\n      "actions": [\\n        { "type": "pointerMove", "duration": 0, "x": 100, "y": 200 },\\n        { "type": "pointerDown", "button": 0 },\\n        { "type": "pointerUp", "button": 0 }\\n      ]\\n    }\\n  ]\\n}' },
+  { title: 'Release Actions', method: 'DELETE', endpoint: '/session/{sessionId}/actions', payload: '' },
+  { title: 'Dismiss Alert', method: 'POST', endpoint: '/session/{sessionId}/alert/dismiss', payload: '{}' },
+  { title: 'Accept Alert', method: 'POST', endpoint: '/session/{sessionId}/alert/accept', payload: '{}' },
+  { title: 'Get Alert Text', method: 'GET', endpoint: '/session/{sessionId}/alert/text', payload: '' },
+  { title: 'Send Alert Text', method: 'POST', endpoint: '/session/{sessionId}/alert/text', payload: '{\\n  "text": "Input text"\\n}' },
+  { title: 'Take Screenshot', method: 'GET', endpoint: '/session/{sessionId}/screenshot', payload: '' },
+  { title: 'Take Element Screenshot', method: 'GET', endpoint: '/session/{sessionId}/element/{elementId}/screenshot', payload: '' },
+  { title: 'Print Page', method: 'POST', endpoint: '/session/{sessionId}/print', payload: '{\\n  "orientation": "portrait",\\n  "scale": 1,\\n  "background": true\\n}' }
+];
 
 function isSuccessStatusCode(statusCode) {
   return Number.isInteger(statusCode) && statusCode >= 200 && statusCode < 300;
@@ -236,6 +298,43 @@ function formatCaptureDateTime(value) {
   return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
 }
 
+function normalizeSessionPlaceholder(endpoint) {
+  return String(endpoint ?? '').replace(/\{sessionId\}/gi, '{session id}');
+}
+
+function trimLeadingSlashes(value) {
+  return String(value ?? '').replace(/^\/+/, '');
+}
+
+function isSessionScopedEndpoint(endpoint) {
+  const normalized = normalizeSessionPlaceholder(endpoint).trim().toLowerCase();
+  const sessionPrefix = GENERIC_SESSION_ENDPOINT_PREFIX.toLowerCase();
+  return normalized === sessionPrefix.slice(0, -1) || normalized.startsWith(sessionPrefix);
+}
+
+function toGenericEndpointInput(endpoint) {
+  const normalized = normalizeSessionPlaceholder(endpoint).trim();
+  if (!normalized) return '';
+
+  const normalizedLower = normalized.toLowerCase();
+  const prefixLower = GENERIC_SESSION_ENDPOINT_PREFIX.toLowerCase();
+  if (normalizedLower.startsWith(prefixLower)) {
+    return normalized.slice(GENERIC_SESSION_ENDPOINT_PREFIX.length);
+  }
+
+  if (normalizedLower === prefixLower.slice(0, -1)) {
+    return '';
+  }
+
+  return trimLeadingSlashes(normalized);
+}
+
+function decodePresetPayload(payload) {
+  return String(payload ?? '')
+    .replace(/\\n/g, '\n')
+    .replace(/\\'/g, "'");
+}
+
 function normalizeCaptureName(value) {
   return (value || '').trim().toLowerCase();
 }
@@ -322,11 +421,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [executedScriptsLoaded, setExecutedScriptsLoaded] = useState(false);
   const [expandedExecutedScriptId, setExpandedExecutedScriptId] = useState(null);
   const [autoRefreshPreferenceLoaded, setAutoRefreshPreferenceLoaded] = useState(false);
+  const [coordinateActionsLoaded, setCoordinateActionsLoaded] = useState(false);
 
   // Generic API state
   const [genericEndpoint, setGenericEndpoint] = useState('');
   const [genericMethod, setGenericMethod] = useState('GET');
   const [genericPayload, setGenericPayload] = useState('');
+  const [selectedWebDriverPresetTitle, setSelectedWebDriverPresetTitle] = useState('none');
   const [genericResult, setGenericResult] = useState('');
   const [genericStatus, setGenericStatus] = useState(null);
   const [sendingGeneric, setSendingGeneric] = useState(false);
@@ -344,6 +445,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const executedScriptsStorageKey = `appium-helper:executed-scripts:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const executedGenericApisStorageKey = `appium-helper:executed-generic-apis:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const screenshotLiveStorageKey = `appium-helper:screenshot-live:${encodeURIComponent(appiumUrl)}:${sessionId}`;
+  const coordinateActionsStorageKey = `appium-helper:coordinate-actions:${encodeURIComponent(appiumUrl)}:${sessionId}`;
   const canSendExecuteScript = executeScriptMode === 'scriptOnly'
     ? Boolean(executeScript.trim())
     : Boolean(executeScriptWithArgsJson.trim());
@@ -526,6 +628,69 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       // Ignore storage errors.
     }
   }, [autoRefreshScreenshot, autoRefreshPreferenceLoaded, screenshotLiveStorageKey]);
+
+  // Restore coordinate actions values for this Appium URL + session.
+  useEffect(() => {
+    setCoordinateActionsLoaded(false);
+    try {
+      const raw = localStorage.getItem(coordinateActionsStorageKey);
+      if (!raw) {
+        setCoordX('');
+        setCoordY('');
+        setSwipeX1('');
+        setSwipeY1('');
+        setSwipeX2('');
+        setSwipeY2('');
+      } else {
+        const parsed = JSON.parse(raw);
+        const valueOrEmpty = (value) => (typeof value === 'string' ? value : '');
+        setCoordX(valueOrEmpty(parsed?.coordX));
+        setCoordY(valueOrEmpty(parsed?.coordY));
+        setSwipeX1(valueOrEmpty(parsed?.swipeX1));
+        setSwipeY1(valueOrEmpty(parsed?.swipeY1));
+        setSwipeX2(valueOrEmpty(parsed?.swipeX2));
+        setSwipeY2(valueOrEmpty(parsed?.swipeY2));
+      }
+    } catch {
+      setCoordX('');
+      setCoordY('');
+      setSwipeX1('');
+      setSwipeY1('');
+      setSwipeX2('');
+      setSwipeY2('');
+    } finally {
+      setCoordinateActionsLoaded(true);
+    }
+  }, [coordinateActionsStorageKey]);
+
+  // Persist coordinate actions values once restored.
+  useEffect(() => {
+    if (!coordinateActionsLoaded) return;
+    try {
+      localStorage.setItem(
+        coordinateActionsStorageKey,
+        JSON.stringify({
+          coordX,
+          coordY,
+          swipeX1,
+          swipeY1,
+          swipeX2,
+          swipeY2
+        })
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [
+    coordX,
+    coordY,
+    swipeX1,
+    swipeY1,
+    swipeX2,
+    swipeY2,
+    coordinateActionsLoaded,
+    coordinateActionsStorageKey
+  ]);
 
   // Restore executed script history for this Appium URL + session.
   useEffect(() => {
@@ -1016,10 +1181,45 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     }
   };
 
-  const handleGenericRequest = async () => {
-    if (!genericEndpoint.trim()) return;
+  const handleSelectWebDriverPreset = (presetTitle) => {
+    setSelectedWebDriverPresetTitle(presetTitle);
+    setGenericResult('');
+    setGenericStatus(null);
+    if (presetTitle === 'none') return;
 
-    const fullEndpoint = `/session/{session id}/${genericEndpoint.replace(/^\//, '')}`;
+    const preset = WEBDRIVER_REFERENCE_PRESETS.find((item) => item.title === presetTitle);
+    if (!preset) return;
+
+    setGenericEndpoint(toGenericEndpointInput(preset.endpoint));
+    setGenericMethod(preset.method);
+    if (preset.method === 'POST') {
+      const payloadText = decodePresetPayload(preset.payload);
+      setGenericPayload(payloadText || '{}');
+    } else {
+      setGenericPayload('');
+    }
+  };
+
+  const handleGenericRequest = async () => {
+    const endpointInput = trimLeadingSlashes(genericEndpoint.trim());
+    if (!endpointInput) return;
+
+    const selectedPreset = WEBDRIVER_REFERENCE_PRESETS.find(
+      (item) => item.title === selectedWebDriverPresetTitle
+    );
+    const selectedPresetInput = selectedPreset
+      ? trimLeadingSlashes(toGenericEndpointInput(selectedPreset.endpoint))
+      : '';
+    const usingUnchangedPresetEndpoint = Boolean(
+      selectedPreset &&
+      endpointInput.toLowerCase() === selectedPresetInput.toLowerCase()
+    );
+    const useAbsoluteEndpoint = Boolean(
+      usingUnchangedPresetEndpoint && !isSessionScopedEndpoint(selectedPreset.endpoint)
+    );
+    const fullEndpoint = useAbsoluteEndpoint
+      ? `/${endpointInput}`
+      : `${GENERIC_SESSION_ENDPOINT_PREFIX}${endpointInput}`;
     const payloadText = genericMethod === 'POST' ? genericPayload.trim() : '';
     let responseText = '';
     let statusCode = null;
@@ -3145,26 +3345,47 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             </div>
           </div>
 
-          {/* Generic API Section */}
-          <div id="generic-api-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
-            <h2 className="text-lg font-semibold text-white mb-4">Generic WebDriver API</h2>
-            <p className="text-gray-400 text-xs mb-3">Send any WebDriver command</p>
+        {/* Generic API Section */}
+        <div id="generic-api-section" className="bg-gray-800 rounded-lg p-6 max-h-175 overflow-y-auto">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Generic WebDriver API</h2>
+                <p className="text-gray-400 text-xs mt-1">Send any WebDriver command</p>
+              </div>
+              <div className="w-80 shrink-0">
+                <label className="block text-gray-300 text-xs font-medium mb-1">
+                  WebDriver API Preset
+                </label>
+                <select
+                  value={selectedWebDriverPresetTitle}
+                  onChange={(e) => handleSelectWebDriverPreset(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="none">none</option>
+                  {WEBDRIVER_REFERENCE_PRESETS.map((preset) => (
+                    <option key={preset.title} value={preset.title}>
+                      {preset.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-gray-300 text-sm font-medium mb-2">
                   Endpoint
                 </label>
-                <div className="flex">
-                  <span className="inline-flex items-center px-3 py-2 bg-gray-600 border border-r-0 border-gray-600 rounded-l-lg text-gray-400 font-mono text-sm">
-                    /session/{'{session id}'}/
+                <div className="flex w-full border border-gray-600 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="px-3 py-2 bg-gray-900 text-gray-400 font-mono text-xs whitespace-nowrap border-r border-gray-600">
+                    {GENERIC_SESSION_ENDPOINT_PREFIX}
                   </span>
                   <input
                     type="text"
                     value={genericEndpoint}
-                    onChange={(e) => setGenericEndpoint(e.target.value)}
-                    placeholder="url"
-                    className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-r-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+                    onChange={(e) => setGenericEndpoint(trimLeadingSlashes(e.target.value))}
+                    placeholder="url (or status for absolute preset)"
+                    className="flex-1 px-3 py-2 bg-gray-700 text-white placeholder-gray-400 focus:outline-none font-mono text-sm min-w-0"
                   />
                 </div>
               </div>
