@@ -10,4 +10,4 @@ echo "Stopping and removing existing containers/images..."
 docker compose --env-file .env -f "$COMPOSE_FILE" down --rmi local --remove-orphans
 
 echo "Deploying updated images..."
-docker compose --env-file .env -f "$COMPOSE_FILE" up --build
+docker compose --env-file .env -f "$COMPOSE_FILE" up --build -d
