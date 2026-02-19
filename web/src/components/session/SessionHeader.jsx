@@ -4,6 +4,7 @@ export default function SessionHeader({
   sessionId,
   onDisconnect,
   error,
+  warning,
   success
 }) {
   return (
@@ -21,12 +22,17 @@ export default function SessionHeader({
         </button>
       </div>
 
-      {(error || success) && (
+      {(error || warning || success) && (
         <div className="session-header-feedback fixed top-5 left-0 right-0 z-[10000] px-4 pointer-events-none">
           <div className="session-header-feedback-stack max-w-4xl mx-auto space-y-2">
             {error && (
               <div className="session-header-error-banner pointer-events-auto p-3 bg-red-900/70 border border-red-700 rounded-lg text-red-200 text-sm shadow-lg">
                 {error}
+              </div>
+            )}
+            {warning && (
+              <div className="session-header-warning-banner pointer-events-auto p-3 bg-orange-900/70 border border-orange-700 rounded-lg text-orange-200 text-sm shadow-lg">
+                {warning}
               </div>
             )}
             {success && (

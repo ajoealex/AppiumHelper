@@ -47,6 +47,7 @@ const EXECUTE_SCRIPT_PAYLOAD_EXAMPLE = `{
 const REQUEST_HISTORY_LIMIT = 10;
 const GENERIC_SESSION_ENDPOINT_PREFIX = '/session/{session id}/';
 const SCREENSHOT_SWIPE_THRESHOLD_PX = 24;
+const INTERACTIVE_CONTEXT_CHECK_INTERVAL_MS = 20000;
 const WEBDRIVER_REFERENCE_PRESETS = [
   { title: 'New Session', method: 'POST', endpoint: '/session', payload: '{\\n  "capabilities": {\\n    "alwaysMatch": {\\n      "browserName": "chrome"\\n    }\\n  }\\n}' },
   { title: 'Delete Session', method: 'DELETE', endpoint: '/session/{sessionId}', payload: '' },
@@ -392,7 +393,9 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
   const [gettingCurrentContext, setGettingCurrentContext] = useState(false);
   const [settingContext, setSettingContext] = useState(false);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
   const [success, setSuccess] = useState('');
+  const [capturesSectionTab, setCapturesSectionTab] = useState('captures');
   const [currentScreenshot, setCurrentScreenshot] = useState(null);
   const [previewCapture, setPreviewCapture] = useState(null);
   const [autoRefreshScreenshot, setAutoRefreshScreenshot] = useState(false);
@@ -700,6 +703,46 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     wasScreenshotInteractModeEnabledRef.current = isScreenshotInteractModeEnabled;
   }, [isScreenshotInteractModeEnabled, fetchDeviceWindowRect]);
 
+  useEffect(() => {
+    if (!isScreenshotInteractModeEnabled) return;
+
+    let isDisposed = false;
+    let isChecking = false;
+
+    const checkCurrentContext = async () => {
+      if (isChecking || isDisposed) return;
+      isChecking = true;
+      try {
+        const data = await api.getCurrentContext(appiumUrl, sessionId, customHeaders);
+        if (isDisposed) return;
+        const contextName = typeof data?.value === 'string' ? data.value.trim() : '';
+        if (!contextName) return;
+
+        setContexts((prev) => (prev.includes(contextName) ? prev : [...prev, contextName]));
+        setSelectedContext(contextName);
+
+        if (contextName.toUpperCase() !== 'NATIVE_APP') {
+          setIsScreenshotInteractExpanded(false);
+          setShowScreenshotSendKeysInput(false);
+          setWarning('Exiting from interactive mode. Interactive mode is applicable only for native view');
+        }
+      } catch {
+        // Ignore periodic context check errors to avoid noisy banners.
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      void checkCurrentContext();
+    }, INTERACTIVE_CONTEXT_CHECK_INTERVAL_MS);
+
+    return () => {
+      isDisposed = true;
+      clearInterval(intervalId);
+    };
+  }, [isScreenshotInteractModeEnabled, appiumUrl, sessionId, customHeaders]);
+
   // Auto-dismiss messages after 5 seconds
   useEffect(() => {
     if (success) {
@@ -714,6 +757,13 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       return () => clearTimeout(timer);
     }
   }, [error]);
+
+  useEffect(() => {
+    if (warning) {
+      const timer = setTimeout(() => setWarning(''), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [warning]);
 
   // Restore screenshot live toggle for this Appium URL + session.
   useEffect(() => {
@@ -1028,6 +1078,43 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
     setError('');
     try {
       const data = await api.getCurrentContext(appiumUrl, sessionId, customHeaders);
+      const contextName = typeof data?.value === 'string' ? data.value.trim() : '';
+
+      if (!contextName) {
+        setError('Current context response did not include a context name');
+        return;
+      }
+
+      setContexts((prev) => (prev.includes(contextName) ? prev : [...prev, contextName]));
+      setSelectedContext(contextName);
+
+      const shouldExitInteractiveMode = isScreenshotInteractModeEnabled && contextName !== 'NATIVE_APP';
+      if (shouldExitInteractiveMode) {
+        setIsScreenshotInteractExpanded(false);
+        setShowScreenshotSendKeysInput(false);
+      }
+
+      setSuccess(
+        shouldExitInteractiveMode
+          ? `Current context: ${contextName}. Interactive mode disabled (requires NATIVE_APP).`
+          : `Current context: ${contextName}`
+      );
+    } catch (err) {
+      setError('Failed to get current context: ' + err.message);
+    } finally {
+      setGettingCurrentContext(false);
+    }
+  };
+
+  const handleToggleScreenshotInteractExpanded = async () => {
+    if (isScreenshotInteractExpanded) {
+      setIsScreenshotInteractExpanded(false);
+      return;
+    }
+
+    setError('');
+    try {
+      const data = await api.getCurrentContext(appiumUrl, sessionId, customHeaders);
       const contextName = typeof data?.value === 'string' ? data.value : '';
 
       if (!contextName) {
@@ -1037,11 +1124,15 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
 
       setContexts((prev) => (prev.includes(contextName) ? prev : [...prev, contextName]));
       setSelectedContext(contextName);
-      setSuccess(`Current context: ${contextName}`);
+
+      if (contextName !== 'NATIVE_APP') {
+        setError(`Interactive mode requires NATIVE_APP context. Current context: ${contextName}`);
+        return;
+      }
+
+      setIsScreenshotInteractExpanded(true);
     } catch (err) {
-      setError('Failed to get current context: ' + err.message);
-    } finally {
-      setGettingCurrentContext(false);
+      setError('Failed to verify current context for interactive mode: ' + err.message);
     }
   };
 
@@ -1051,11 +1142,21 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
       return;
     }
 
+    const nextContext = selectedContext.trim();
+    const isNonNativeContext = nextContext.toUpperCase() !== 'NATIVE_APP';
+
     setSettingContext(true);
     setError('');
     try {
-      await api.setContext(appiumUrl, sessionId, selectedContext, customHeaders);
-      setSuccess(`Context set to: ${selectedContext}`);
+      await api.setContext(appiumUrl, sessionId, nextContext, customHeaders);
+      setSuccess(`Context set to: ${nextContext}`);
+
+      if (isScreenshotInteractModeEnabled && isNonNativeContext) {
+        setIsScreenshotInteractExpanded(false);
+        setShowScreenshotSendKeysInput(false);
+        setWarning('Exiting from interactive mode. Interactive mode is applicable only for native view');
+      }
+
       await refreshLogsAfterWebDriverAction();
     } catch (err) {
       setError('Failed to set context: ' + err.message);
@@ -2438,6 +2539,7 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
           sessionId={sessionId}
           onDisconnect={onDisconnect}
           error={error}
+          warning={warning}
           success={success}
         />
         <CaptureControlsSection
@@ -2455,44 +2557,375 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
           capturingScreenshot={capturingScreenshot}
           handleCaptureScreenshot={handleCaptureScreenshot}
         />
-        <CapturesPreviewSection
-          captures={captures}
-          handleDeleteAll={handleDeleteAll}
-          setSelectedCapture={setSelectedCapture}
-          formatCaptureDateTime={formatCaptureDateTime}
-          handlePreview={handlePreview}
-          api={api}
-          handleRenameCaptureTile={handleRenameCaptureTile}
-          handleDeleteCaptureTile={handleDeleteCaptureTile}
-          previewCapture={previewCapture}
-          setPreviewCapture={setPreviewCapture}
-          autoRefreshScreenshot={autoRefreshScreenshot}
-          fetchScreenshot={fetchScreenshot}
-          setAutoRefreshScreenshot={setAutoRefreshScreenshot}
-          parsedScreenshotRefreshSeconds={parsedScreenshotRefreshSeconds}
-          screenshotRefreshSecondsInput={screenshotRefreshSecondsInput}
-          setScreenshotRefreshSecondsInput={setScreenshotRefreshSecondsInput}
-          handleSetScreenshotRefreshInterval={handleSetScreenshotRefreshInterval}
-          currentScreenshot={currentScreenshot}
-          isLiveScreenshotInteractable={isLiveScreenshotInteractable}
-          screenshotLiveImageRef={screenshotLiveImageRef}
-          handleLiveScreenshotPointerDown={handleLiveScreenshotPointerDown}
-          handleLiveScreenshotPointerMove={handleLiveScreenshotPointerMove}
-          handleLiveScreenshotPointerUp={handleLiveScreenshotPointerUp}
-          handleLiveScreenshotPointerCancel={handleLiveScreenshotPointerCancel}
-          screenshotGestureStart={screenshotGestureStart}
-          screenshotGestureCurrent={screenshotGestureCurrent}
-          isRunningScreenshotGesture={isRunningScreenshotGesture}
-          isScreenshotInteractExpanded={isScreenshotInteractExpanded}
-          setIsScreenshotInteractExpanded={setIsScreenshotInteractExpanded}
-          lastScreenshotPressCoordinates={lastScreenshotPressCoordinates}
-          showScreenshotSendKeysInput={showScreenshotSendKeysInput}
-          setShowScreenshotSendKeysInput={setShowScreenshotSendKeysInput}
-          screenshotSendKeysText={screenshotSendKeysText}
-          setScreenshotSendKeysText={setScreenshotSendKeysText}
-          sendingScreenshotKeys={sendingScreenshotKeys}
-          handleSendScreenshotKeys={handleSendScreenshotKeys}
-        />
+        <div id="captures-subtabs" className="mt-6 mb-3 border-b border-gray-700">
+          <div className="inline-flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCapturesSectionTab('captures')}
+              className={`px-4 py-2 rounded-t-lg border text-sm font-medium transition-colors cursor-pointer ${
+                capturesSectionTab === 'captures'
+                  ? 'bg-gray-800 border-gray-600 border-b-gray-800 text-white'
+                  : 'bg-gray-900/60 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-800/70'
+              }`}
+            >
+              Captures
+            </button>
+            <button
+              type="button"
+              onClick={() => setCapturesSectionTab('coordinateActions')}
+              className={`px-4 py-2 rounded-t-lg border text-sm font-medium transition-colors cursor-pointer ${
+                capturesSectionTab === 'coordinateActions'
+                  ? 'bg-gray-800 border-gray-600 border-b-gray-800 text-white'
+                  : 'bg-gray-900/60 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-800/70'
+              }`}
+            >
+              Coordinate Actions
+            </button>
+          </div>
+        </div>
+        {capturesSectionTab === 'captures' && (
+          <CapturesPreviewSection
+            captures={captures}
+            handleDeleteAll={handleDeleteAll}
+            setSelectedCapture={setSelectedCapture}
+            formatCaptureDateTime={formatCaptureDateTime}
+            handlePreview={handlePreview}
+            api={api}
+            handleRenameCaptureTile={handleRenameCaptureTile}
+            handleDeleteCaptureTile={handleDeleteCaptureTile}
+            previewCapture={previewCapture}
+            setPreviewCapture={setPreviewCapture}
+            autoRefreshScreenshot={autoRefreshScreenshot}
+            fetchScreenshot={fetchScreenshot}
+            setAutoRefreshScreenshot={setAutoRefreshScreenshot}
+            parsedScreenshotRefreshSeconds={parsedScreenshotRefreshSeconds}
+            screenshotRefreshSecondsInput={screenshotRefreshSecondsInput}
+            setScreenshotRefreshSecondsInput={setScreenshotRefreshSecondsInput}
+            handleSetScreenshotRefreshInterval={handleSetScreenshotRefreshInterval}
+            currentScreenshot={currentScreenshot}
+            isLiveScreenshotInteractable={isLiveScreenshotInteractable}
+            screenshotLiveImageRef={screenshotLiveImageRef}
+            handleLiveScreenshotPointerDown={handleLiveScreenshotPointerDown}
+            handleLiveScreenshotPointerMove={handleLiveScreenshotPointerMove}
+            handleLiveScreenshotPointerUp={handleLiveScreenshotPointerUp}
+            handleLiveScreenshotPointerCancel={handleLiveScreenshotPointerCancel}
+            screenshotGestureStart={screenshotGestureStart}
+            screenshotGestureCurrent={screenshotGestureCurrent}
+            isRunningScreenshotGesture={isRunningScreenshotGesture}
+            isScreenshotInteractExpanded={isScreenshotInteractExpanded}
+            handleToggleScreenshotInteractExpanded={handleToggleScreenshotInteractExpanded}
+            lastScreenshotPressCoordinates={lastScreenshotPressCoordinates}
+            showScreenshotSendKeysInput={showScreenshotSendKeysInput}
+            setShowScreenshotSendKeysInput={setShowScreenshotSendKeysInput}
+            screenshotSendKeysText={screenshotSendKeysText}
+            setScreenshotSendKeysText={setScreenshotSendKeysText}
+            sendingScreenshotKeys={sendingScreenshotKeys}
+            handleSendScreenshotKeys={handleSendScreenshotKeys}
+          />
+        )}
+        {capturesSectionTab === 'coordinateActions' && (
+          <div id="coordinate-actions-subtab" className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div
+              id="coordinate-actions-panel"
+              className={`bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden transition-[height] duration-200 ${
+                isScreenshotInteractExpanded ? 'lg:h-[calc(100vh-120px)]' : 'lg:h-[700px]'
+              }`}
+            >
+              <h2 className="text-lg font-semibold text-white mb-2">Coordinate Actions</h2>
+              <p className="text-gray-400 text-xs mb-4">
+                Run coordinate-based tap/click/swipe actions and send keys to focused element.
+              </p>
+
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 flex-1 overflow-y-auto">
+                <div className="space-y-3">
+                  <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
+                    <p className="text-[11px] text-gray-400 mb-2">Coordinate action</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <input
+                        type="number"
+                        value={coordX}
+                        onChange={(e) => setCoordX(e.target.value)}
+                        placeholder="X"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <input
+                        type="number"
+                        value={coordY}
+                        onChange={(e) => setCoordY(e.target.value)}
+                        placeholder="Y"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <button
+                        onClick={handleTapCoordinates}
+                        disabled={runningElementAction === 'coord:tap'}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                      >
+                        Tap
+                      </button>
+                      <button
+                        onClick={handleClickCoordinates}
+                        disabled={runningElementAction === 'coord:click'}
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                      >
+                        Click
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
+                    <p className="text-[11px] text-gray-400 mb-2">Swipe by coordinate</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <input
+                        type="number"
+                        value={swipeX1}
+                        onChange={(e) => setSwipeX1(e.target.value)}
+                        placeholder="X1"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <input
+                        type="number"
+                        value={swipeY1}
+                        onChange={(e) => setSwipeY1(e.target.value)}
+                        placeholder="Y1"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <button
+                        onClick={handleSwapSwipeCoordinates}
+                        className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] transition-colors cursor-pointer"
+                        title="Swap X1,Y1 with X2,Y2"
+                        aria-label="Swap X1,Y1 with X2,Y2"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-3-3m3 3l-3 3M16 17H4m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                      </button>
+                      <input
+                        type="number"
+                        value={swipeX2}
+                        onChange={(e) => setSwipeX2(e.target.value)}
+                        placeholder="X2"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <input
+                        type="number"
+                        value={swipeY2}
+                        onChange={(e) => setSwipeY2(e.target.value)}
+                        placeholder="Y2"
+                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      />
+                      <button
+                        onClick={handleSwipeByCoordinates}
+                        disabled={runningElementAction === 'coord:swipe'}
+                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
+                      >
+                        {runningElementAction === 'coord:swipe' ? 'Swiping...' : 'Swipe'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={handleOpenFocusedKeysModal}
+                  disabled={sendingFocusedKeys || runningElementAction === 'focused:keys'}
+                  className="mt-2 px-3 py-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
+                  </svg>
+                  Send Keys To Focused Element
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="screenshot-preview"
+              className="session-screenshot-panel relative bg-gray-800 rounded-lg p-6 flex flex-col overflow-hidden transition-[height] duration-200"
+              style={{ height: isScreenshotInteractExpanded ? 'calc(100vh - 120px)' : '700px' }}
+            >
+              <div className="session-screenshot-header-row flex items-start justify-between mb-3">
+                <div className="session-screenshot-title-wrap flex items-center gap-2 min-w-0">
+                  <h2 className="session-screenshot-title text-lg font-semibold text-white truncate">
+                    {previewCapture ? `Preview: ${previewCapture.name}` : 'Screenshot'}
+                  </h2>
+                  {lastScreenshotPressCoordinates && (
+                    <span className="session-screenshot-last-press-badge shrink-0 px-2 py-0.5 rounded border border-cyan-700/70 bg-cyan-900/40 text-cyan-200 text-[11px] font-mono">
+                      x:{lastScreenshotPressCoordinates.x} y:{lastScreenshotPressCoordinates.y}
+                    </span>
+                  )}
+                </div>
+                <div className="session-screenshot-header-actions w-fit max-w-[380px] ml-auto">
+                  {previewCapture ? (
+                    <button
+                      onClick={() => setPreviewCapture(null)}
+                      className="session-screenshot-clear-preview-btn text-gray-400 hover:text-white text-sm cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  ) : (
+                    <div className="session-screenshot-controls flex items-center justify-end gap-2">
+                      {autoRefreshScreenshot && (
+                        <button
+                          onClick={handleToggleScreenshotInteractExpanded}
+                          className={`session-screenshot-interact-toggle-btn px-3 py-1 text-sm rounded-lg transition-colors cursor-pointer ${
+                            isScreenshotInteractExpanded
+                              ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                          }`}
+                          title={isScreenshotInteractExpanded ? 'Return to compact preview size' : 'Expand screenshot for interaction'}
+                        >
+                          {isScreenshotInteractExpanded ? 'Compact' : 'Interact'}
+                        </button>
+                      )}
+                      {isScreenshotInteractModeEnabled && (
+                        <button
+                          onClick={() => setShowScreenshotSendKeysInput((prev) => !prev)}
+                          className={`session-screenshot-send-keys-toggle-btn h-8 w-8 rounded transition-colors cursor-pointer inline-flex items-center justify-center ${
+                            showScreenshotSendKeysInput
+                              ? 'bg-violet-700 text-white border border-violet-500'
+                              : 'bg-violet-600 hover:bg-violet-700 text-white'
+                          }`}
+                          title="Send keys via WebDriver actions"
+                          aria-label="Send keys"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
+                          </svg>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (!autoRefreshScreenshot) fetchScreenshot();
+                          setAutoRefreshScreenshot(!autoRefreshScreenshot);
+                        }}
+                        className={`session-screenshot-live-toggle-btn px-3 py-1 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                          autoRefreshScreenshot
+                            ? 'bg-green-600 hover:bg-green-700 text-white'
+                            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                        }`}
+                        title={autoRefreshScreenshot ? 'Stop auto-refresh' : `Auto-refresh every ${parsedScreenshotRefreshSeconds}s`}
+                      >
+                        <svg className={`w-4 h-4 ${autoRefreshScreenshot ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Live
+                      </button>
+                      <div className="session-screenshot-interval-control flex items-center gap-1 bg-gray-700 border border-gray-600 rounded-lg px-2 py-1">
+                        <input
+                          type="number"
+                          min="1"
+                          value={screenshotRefreshSecondsInput}
+                          onChange={(e) => setScreenshotRefreshSecondsInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSetScreenshotRefreshInterval();
+                          }}
+                          className="session-screenshot-interval-input w-16 bg-transparent text-white text-sm focus:outline-none"
+                          title="Live refresh interval in seconds"
+                        />
+                        <span className="text-gray-300 text-xs">sec</span>
+                        <button
+                          onClick={handleSetScreenshotRefreshInterval}
+                          className="session-screenshot-interval-set-btn px-2 py-0.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-[11px] transition-colors cursor-pointer"
+                          title="Apply refresh interval"
+                        >
+                          Set
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {!previewCapture && isScreenshotInteractModeEnabled && showScreenshotSendKeysInput && (
+                <div className="session-screenshot-send-keys-wrap absolute top-16 right-6 z-30 w-[min(380px,calc(100%-3rem))] pointer-events-none">
+                  <div className="session-screenshot-send-keys-panel pointer-events-auto w-full rounded-lg border border-violet-700/40 bg-violet-950/95 p-2 space-y-2 shadow-2xl">
+                    <textarea
+                      value={screenshotSendKeysText}
+                      onChange={(e) => setScreenshotSendKeysText(e.target.value)}
+                      rows={3}
+                      placeholder="Type text to send to the active element..."
+                      className="session-screenshot-send-keys-textarea w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-violet-500 font-mono resize-y"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={handleSendScreenshotKeys}
+                        disabled={sendingScreenshotKeys || screenshotSendKeysText.length === 0}
+                        className="session-screenshot-send-keys-submit-btn px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 disabled:text-gray-300 text-white rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M13 5l7 7-7 7" />
+                        </svg>
+                        {sendingScreenshotKeys ? 'Sending...' : 'Send'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="session-screenshot-canvas-wrap flex-1 flex items-start justify-center bg-gray-900 rounded-lg overflow-y-auto overflow-x-hidden min-h-[420px] p-2">
+                {previewCapture ? (
+                  <div className="session-screenshot-preview-stage w-full h-full min-h-0 flex items-center justify-center">
+                    <img
+                      src={api.getScreenshotUrl(previewCapture.name)}
+                      alt={`Preview: ${previewCapture.name}`}
+                      className="session-screenshot-preview-image max-w-full max-h-full w-auto h-auto rounded"
+                    />
+                  </div>
+                ) : currentScreenshot ? (
+                  isLiveScreenshotInteractable ? (
+                    <div className="session-screenshot-live-interact-mode w-full">
+                      <div className="session-screenshot-live-hint mb-2 text-[11px] text-gray-400">
+                        Live gesture mode: tap image to send tap, drag on image to send swipe.
+                      </div>
+                      <div className="session-screenshot-live-stage relative w-full cursor-crosshair">
+                        <img
+                          ref={screenshotLiveImageRef}
+                          src={`data:image/png;base64,${currentScreenshot}`}
+                          alt="Current screenshot"
+                          className="session-screenshot-live-image w-full h-auto rounded select-none"
+                          onPointerDown={handleLiveScreenshotPointerDown}
+                          onPointerMove={handleLiveScreenshotPointerMove}
+                          onPointerUp={handleLiveScreenshotPointerUp}
+                          onPointerCancel={handleLiveScreenshotPointerCancel}
+                          style={{ touchAction: 'none' }}
+                          title="Tap to send tap, drag to send swipe"
+                        />
+                        {screenshotGestureStart && screenshotGestureCurrent && (
+                          <div className="session-screenshot-gesture-badge absolute left-2 top-2 pointer-events-none rounded bg-gray-900/80 border border-cyan-500/70 px-2 py-1 text-[11px] text-cyan-200 font-mono">
+                            {screenshotGestureStart.x},{screenshotGestureStart.y}{' -> '}{screenshotGestureCurrent.x},{screenshotGestureCurrent.y}
+                          </div>
+                        )}
+                        {isRunningScreenshotGesture && (
+                          <div className="session-screenshot-gesture-running-badge absolute right-2 top-2 pointer-events-none rounded bg-gray-900/80 border border-amber-500/70 px-2 py-1 text-[11px] text-amber-200">
+                            Sending gesture...
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="session-screenshot-live-preview-stage w-full h-full min-h-0 flex items-center justify-center">
+                      <img
+                        ref={screenshotLiveImageRef}
+                        src={`data:image/png;base64,${currentScreenshot}`}
+                        alt="Current screenshot"
+                        className="session-screenshot-live-preview-image max-w-full max-h-full w-auto h-auto rounded"
+                        title="Enable Live and click Interact for tap/swipe gestures"
+                      />
+                    </div>
+                  )
+                ) : (
+                  <div className="session-screenshot-empty-state text-gray-500 text-sm text-center p-4">
+                    <svg className="w-12 h-12 mx-auto mb-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <p>No screenshot captured yet</p>
+                    <p className="text-xs mt-1">Click "Capture Source", "Capture Screenshot", or "Preview" to view</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Element Finder and Saved Elements */} 
         <div id="elements-sections" className="session-elements-sections grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
@@ -2633,107 +3066,6 @@ export default function Session({ appiumUrl, sessionId, customHeaders = {}, onDi
             <p className="text-gray-400 text-xs mb-4">
               Save named element references, re-check existence, and run tap/click/keys actions.
             </p>
-
-            <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
-              <p className="text-xs text-gray-400 mb-2">Coordinate actions</p>
-              <div className="space-y-3">
-                <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
-                  <p className="text-[11px] text-gray-400 mb-2">oordinate action</p>
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <input
-                      type="number"
-                      value={coordX}
-                      onChange={(e) => setCoordX(e.target.value)}
-                      placeholder="X"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <input
-                      type="number"
-                      value={coordY}
-                      onChange={(e) => setCoordY(e.target.value)}
-                      placeholder="Y"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <button
-                      onClick={handleTapCoordinates}
-                      disabled={runningElementAction === 'coord:tap'}
-                      className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
-                    >
-                      Tap
-                    </button>
-                    <button
-                      onClick={handleClickCoordinates}
-                      disabled={runningElementAction === 'coord:click'}
-                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
-                    >
-                      Click
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-2 bg-gray-800/60 border border-gray-700 rounded">
-                  <p className="text-[11px] text-gray-400 mb-2">Swipe by coordinate</p>
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <input
-                      type="number"
-                      value={swipeX1}
-                      onChange={(e) => setSwipeX1(e.target.value)}
-                      placeholder="X1"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <input
-                      type="number"
-                      value={swipeY1}
-                      onChange={(e) => setSwipeY1(e.target.value)}
-                      placeholder="Y1"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <button
-                      onClick={handleSwapSwipeCoordinates}
-                      className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] transition-colors cursor-pointer"
-                      title="Swap X1,Y1 with X2,Y2"
-                      aria-label="Swap X1,Y1 with X2,Y2"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-3-3m3 3l-3 3M16 17H4m0 0l3-3m-3 3l3 3" />
-                      </svg>
-                    </button>
-                    <input
-                      type="number"
-                      value={swipeX2}
-                      onChange={(e) => setSwipeX2(e.target.value)}
-                      placeholder="X2"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <input
-                      type="number"
-                      value={swipeY2}
-                      onChange={(e) => setSwipeY2(e.target.value)}
-                      placeholder="Y2"
-                      className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <button
-                      onClick={handleSwipeByCoordinates}
-                      disabled={runningElementAction === 'coord:swipe'}
-                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer"
-                    >
-                      {runningElementAction === 'coord:swipe' ? 'Swiping...' : 'Swipe'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={handleOpenFocusedKeysModal}
-                disabled={sendingFocusedKeys || runningElementAction === 'focused:keys'}
-                className="mt-2 px-3 py-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 text-white rounded text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 11h1m2 0h1m2 0h1m2 0h1m2 0h1M8 15h8" />
-                </svg>
-                Send Keys To Focused Element
-              </button>
-            </div>
 
             <div className="mb-4 p-3 bg-gray-900 rounded-lg border border-gray-700">
               <p className="text-xs text-gray-400 mb-2">Add element manually</p>

@@ -29,7 +29,7 @@ export default function CapturesPreviewSection({
   screenshotGestureCurrent,
   isRunningScreenshotGesture,
   isScreenshotInteractExpanded,
-  setIsScreenshotInteractExpanded,
+  handleToggleScreenshotInteractExpanded,
   lastScreenshotPressCoordinates,
   showScreenshotSendKeysInput,
   setShowScreenshotSendKeysInput,
@@ -192,7 +192,7 @@ export default function CapturesPreviewSection({
               <div className="session-screenshot-controls flex items-center justify-end gap-2">
                 {autoRefreshScreenshot && (
                   <button
-                    onClick={() => setIsScreenshotInteractExpanded((prev) => !prev)}
+                    onClick={handleToggleScreenshotInteractExpanded}
                     className={`session-screenshot-interact-toggle-btn px-3 py-1 text-sm rounded-lg transition-colors cursor-pointer ${
                       isScreenshotInteractExpanded
                         ? 'bg-amber-600 hover:bg-amber-700 text-white'
